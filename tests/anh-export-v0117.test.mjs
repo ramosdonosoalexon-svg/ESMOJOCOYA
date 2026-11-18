@@ -1,0 +1,8 @@
+import test from 'node:test';import assert from 'node:assert/strict';
+import {buildAnhReport} from '../src/anhReportMath.js';
+import {createAnhExcelBytes} from '../src/anhExcelExport.js';
+import {printAnhReport} from '../src/anhPrint.js';
+const report=buildAnhReport({month:'2026-11',station:{name:'Estación de prueba',type:'estacion',city:'Oruro'},products:[{code:'DO',active:true},{code:'GNV',active:true}],initialSettings:[{id:'start',date:'2026-11-01'}],initialTanks:[{productCode:'DO',accountingLiters:1000}],nowISO:'2026-11-01'});
+test('xlsx ZIP válido y contiene hojas de estación líquida y GNV',()=>{const buf=createAnhExcelBytes(report);assert.equal(buf[0],0x50);assert.equal(buf[1],0x4b);assert.ok(buf.length>5000);const text=new TextDecoder().decode(buf);assert.ok(text.includes('Octano DO'));assert.ok(text.includes('ANH GNV'));assert.ok(text.includes('EESS DO'));});
+test('no inventa hojas GNV para un puesto',()=>{const r=buildAnhReport({month:'2026-11',station:{name:'Puesto de prueba',type:'puesto',city:'Potosí'},products:[{code:'DO',active:true},{code:'GNV',active:true}],initialSettings:[{id:'start',date:'2026-11-01'}],nowISO:'2026-11-01'});const text=new TextDecoder().decode(createAnhExcelBytes(r));assert.ok(text.includes('Puesto DO'));assert.ok(!text.includes('ANH GNV'));});
+test('impresión PDF de GNV no genera QR ni firma oficial',()=>{let written='';globalThis.window={open:()=>({document:{open(){},write(x){written=x},close(){}},focus(){}})};printAnhReport(report,'gnv');assert.ok(written.includes('A4 portrait'));assert.ok(written.includes('GAS NATURAL VEHICULAR'));assert.ok(written.includes('sin QR, código oficial ni firma')||written.includes('Sin QR, código oficial ni firma'));delete globalThis.window;});

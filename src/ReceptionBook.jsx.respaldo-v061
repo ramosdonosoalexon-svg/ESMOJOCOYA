@@ -1,0 +1,158 @@
+import React,{useEffect,useMemo,useRef,useState} from 'react';
+import {query,where} from 'firebase/firestore';
+import {Truck,Plus,AlertTriangle,Info} from 'lucide-react';
+import {stationPath} from './data';
+import {useDocuments} from './hooks';
+import {volumeForHeight,colorForProduct,sortRegistered} from './calibrationMath';
+import {calculateReception,sameFamily,familyProducts,receiptDisplayStatus,calculateMeterLine} from './receptionMath';
+import {createReception,voidReception} from './receptionData';
+import './reception.css';
+
+const codeName={GE:'Gasolina Especial',GE_PLUS:'Gasolina Especial Plus',DO:'Diésel Oil',D_ULS:'Diésel ULS'};
+const show=n=>typeof n==='number'&&Number.isFinite(n)?n.toLocaleString('es-BO',{maximumFractionDigits:3}):'—';
+const localDate=()=>{const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;};
+const freshForm=()=>({date:localDate(),tankId:'',productCode:'',priorProductCode:'',
+  documentNumber:'',supplier:'',cisternPlate:'',startedAt:'',finishedAt:'',
+  startHeightMm:'',endHeightMm:'',documentLiters:'',otherIncomeLiters:'0',otherIncomeDocument:'',
+  changeReason:'',oldProductAccountingL:'',observation:'',meterMode:'none',
+  meterCoverageComplete:false,meterRows:[]});
+const types=h=>Array.isArray(h.meterTypes)&&h.meterTypes.length?h.meterTypes:(h.meterType?[h.meterType]:[]);
+
+// Evita que un error de renderizado del formulario deje toda la web en blanco.
+// Conservamos las recepciones y las demás pestañas disponibles para el usuario.
+class ReceptionPanelGuard extends React.Component {
+  constructor(props){super(props);this.state={error:null};}
+  static getDerivedStateFromError(error){return {error};}
+  componentDidCatch(error,details){console.error('Error al abrir Nueva recepción:',error,details);}
+  render(){
+    if(this.state.error)return <section className="panel rec-form-panel rec-error-panel" role="alert">
+      <h2>No se pudo abrir el formulario de recepción</h2>
+      <p>La estación y sus registros no se han eliminado. Cierra este formulario y vuelve a intentarlo. Si persiste, copia el siguiente detalle para corregir el problema.</p>
+      <pre>{String(this.state.error?.message||this.state.error)}</pre>
+      <button type="button" className="secondary" onClick={this.props.onClose}>Cerrar formulario</button>
+    </section>;
+    return this.props.children;
+  }
+}
+
+
+function MeterInput({hose,dispenser,row,onChange}){
+  if(!hose)return <p className="rec-warning">Una manguera seleccionada ya no está disponible. Desmárcala y vuelve a seleccionarla.</p>;
+  const meterTypes=types(hose);
+  const shared=(hose.feedTankIds?.length||0)>1;
+  function field(type,key,value){onChange({...row,readings:{...row.readings,[type]:{...(row.readings?.[type]||{}),[key]:value}}});}
+  let calc=null;try{calc=calculateMeterLine(row);}catch{}
+  return <div className="rec-meter-row"><div className="rec-meter-head"><b>{dispenser?.name||'Dispenser'} · {hose.name}</b><small>{codeName[hose.productCode]||hose.productCode} · {shared?'Línea compartida':'Tanque único'}</small></div>
+    <div className="rec-meter-fields">
+      {meterTypes.map(type=><React.Fragment key={type}><label>{type==='mecanico'?'Mecánico':'Digital'} antes<input type="number" min="0" step="any" value={row.readings?.[type]?.initial??''} onChange={e=>field(type,'initial',e.target.value)}/></label><label>{type==='mecanico'?'Mecánico':'Digital'} después<input type="number" min="0" step="any" value={row.readings?.[type]?.final??''} onChange={e=>field(type,'final',e.target.value)}/></label></React.Fragment>)}
+      <label>Producto despachado<select value={row.productCode||''} onChange={e=>onChange({...row,productCode:e.target.value})}>{familyProducts(hose.productCode||row.productCode||'').map(code=><option key={code} value={code}>{codeName[code]}</option>)}</select></label>
+      {meterTypes.length===2&&<label>Medidor para cálculo<select value={row.primary} onChange={e=>onChange({...row,primary:e.target.value})}><option value="mecanico">Mecánico</option><option value="digital">Digital</option></select></label>}
+      {shared&&<label>Litros atribuibles a este tanque<input type="number" min="0" step="any" value={row.allocatedLiters??''} onChange={e=>onChange({...row,allocatedLiters:e.target.value})}/></label>}
+      <div className="rec-meter-out"><small>Despacho considerado</small><b>{show(calc?.allocatedLiters)} L</b>{calc?.meterTotals?.mecanico!==undefined&&calc?.meterTotals?.digital!==undefined&&<small>Dif. mecánico/digital: {show(calc.meterTotals.mecanico-calc.meterTotals.digital)} L</small>}</div>
+    </div>
+    {shared&&<p className="rec-note">Esta manguera recibe de varios tanques: no se puede asignar todo el despacho automáticamente.</p>}
+  </div>;
+}
+function ReceptionForm({stationId,uid,tanks,dispensers,hoses,calibrations,onSaved,onClose}){
+  const [form,setForm]=useState(freshForm);
+  const [busy,setBusy]=useState(false),[error,setError]=useState('');
+  const tanksLiquid=sortRegistered((Array.isArray(tanks)?tanks:[]).filter(t=>t&&t.productCode!=='GNV'&&t.active!==false));
+  const tank=tanksLiquid.find(t=>t.id===form.tankId);
+  const calibration=(Array.isArray(calibrations)?calibrations:[]).find(c=>c&&c.id===tank?.activeCalibrationId);
+  const availableProducts=tank?familyProducts(tank.productCode):[];
+  const compatibleHoses=sortRegistered((Array.isArray(hoses)?hoses:[]).filter(h=>h&&h.active!==false&&Array.isArray(h.feedTankIds)&&h.feedTankIds.includes(form.tankId)&&sameFamily(h.productCode||tank?.productCode,tank?.productCode)));
+  const initialL=calibration?volumeForHeight(calibration.points,form.startHeightMm):null;
+  const finalL=calibration?volumeForHeight(calibration.points,form.endHeightMm):null;
+  const meterRows=form.meterRows;
+  const allHosesCovered=compatibleHoses.length>0&&compatibleHoses.every(h=>meterRows.some(r=>r.hoseId===h.id));
+  let preview=null,previewError='';
+  if(initialL!==null&&finalL!==null&&form.documentLiters!==''&&form.otherIncomeLiters!==''){
+    try {preview=calculateReception({startVolumeL:initialL,endVolumeL:finalL,documentLiters:Number(form.documentLiters),otherIncomeLiters:Number(form.otherIncomeLiters),meterMode:form.meterMode,meterRows,meterCoverageComplete:allHosesCovered&&form.meterCoverageComplete});}
+    catch(e){previewError=e.message;}
+  }
+  const change=(key,value)=>setForm(f=>({...f,[key]:value}));
+  function chooseTank(id){const t=tanksLiquid.find(x=>x.id===id);setForm(f=>({...f,tankId:id,productCode:t?.productCode||'',priorProductCode:t?.productCode||'',startHeightMm:'',endHeightMm:'',meterMode:'none',meterRows:[],meterCoverageComplete:false,changeReason:'',oldProductAccountingL:''}));}
+  function chooseHose(h,checked){setForm(f=>({...f,meterCoverageComplete:false,meterRows:checked?[...f.meterRows,{
+    hoseId:h.id,hoseName:h.name,dispenserName:dispensers.find(d=>d.id===h.dispenserId)?.name||'',
+    productCode:h.productCode||tanksLiquid.find(t=>t.id===f.tankId)?.productCode,primary:types(h)[0]||'mecanico',shared:(h.feedTankIds?.length||0)>1,
+    allocatedLiters:'',readings:Object.fromEntries(types(h).map(type=>[type,{initial:'',final:''}]))
+  }]:f.meterRows.filter(r=>r.hoseId!==h.id)}));}
+  function editHose(id,row){setForm(f=>({...f,meterRows:f.meterRows.map(r=>r.hoseId===id?row:r)}));}
+  async function submit(e){e.preventDefault();setError('');setBusy(true);
+    try{
+      if(!preview)throw new Error(previewError||'Completa todas las mediciones y el volumen documentado.');
+      await createReception(stationId,{...form,meterCoverageComplete:allHosesCovered&&form.meterCoverageComplete},tank,calibration,uid);
+      onSaved('Recepción guardada. La diferencia se mostrará como provisional cuando falten meters o cobertura completa.');onClose();
+    }catch(err){setError(err.message);}finally{setBusy(false);}
+  }
+  return <section className="panel rec-form-panel"><div className="section-title"><div><span className="ivs-overline">PLANILLA DE RECEPCIÓN · FORMATO MATRIZ</span><h2><Truck size={20}/> Nueva recepción de combustible</h2><p>Registra una descarga por tanque. Los litros físicos se calculan con su tabla volumétrica; los saldos contables por producto se mantienen separados.</p></div><button type="button" className="secondary" onClick={onClose}>Volver al listado</button></div>
+    <div className="rec-form-steps"><span>1. Datos y documento</span><span>2. Antes / después</span><span>3. Otros ingresos</span><span>4. Meters (opcional)</span><span>5. Conciliación</span></div>
+    <form onSubmit={submit} className="rec-form">
+      <div className="rec-measures"><div className="rec-measure-head">1 · Identificación de la cisterna, tanque y producto</div>
+      <div className="rec-form-grid">
+        <label>Fecha operativa<input required type="date" value={form.date} onChange={e=>change('date',e.target.value)}/></label>
+        <label>Tanque de descarga<select required value={form.tankId} onChange={e=>chooseTank(e.target.value)}><option value="">Seleccionar tanque</option>{tanksLiquid.map(t=><option value={t.id} key={t.id}>{t.name} · {codeName[t.productCode]}</option>)}</select></label>
+        <label>Producto que llega<select required disabled={!tank} value={form.productCode} onChange={e=>change('productCode',e.target.value)}>{availableProducts.map(p=><option key={p} value={p}>{codeName[p]}</option>)}</select></label>
+        <label>Producto anterior/remanente<select required disabled={!tank} value={form.priorProductCode} onChange={e=>change('priorProductCode',e.target.value)}>{availableProducts.map(p=><option key={p} value={p}>{codeName[p]}</option>)}</select></label>
+        <label>N.º factura / documento<input required maxLength={100} value={form.documentNumber} onChange={e=>change('documentNumber',e.target.value)}/></label>
+        <label>Proveedor / planta<input required maxLength={150} value={form.supplier} onChange={e=>change('supplier',e.target.value)}/></label>
+        <label>Placa cisterna (opcional)<input maxLength={60} value={form.cisternPlate} onChange={e=>change('cisternPlate',e.target.value)}/></label>
+        <label>Volumen según documento (L)<input required type="number" min="0" step="any" value={form.documentLiters} onChange={e=>change('documentLiters',e.target.value)}/></label>
+      </div></div>
+      {tank&&<p className="rec-note">Tanque seleccionado: <b>{tank.name}</b>. Se permiten los productos de la misma familia (gasolinas entre sí o diéseles entre sí). El inventario físico seguirá siendo el total del tanque.</p>}
+      {form.productCode&&form.priorProductCode!==form.productCode&&<div className="rec-transition"><strong>Transición de combustible y carga muerta</strong><p>El remanente físico del tanque no identifica automáticamente qué litros corresponden a cada gasolina o diésel. Guarda la referencia contable y documenta la autorización de cambio.</p><div className="rec-form-grid"><label>Remanente contable declarado anterior (L; opcional)<input type="number" min="0" step="any" value={form.oldProductAccountingL} onChange={e=>change('oldProductAccountingL',e.target.value)}/></label><label>Justificación y tratamiento del remanente<textarea required rows={2} maxLength={700} value={form.changeReason} onChange={e=>change('changeReason',e.target.value)} placeholder="Tanque agotado hasta nivel de carga muerta; autorización de cambio, procedimiento aplicado..."/></label></div><p className="rec-note">Este dato contable no se deduce de la varilla ni constituye por sí solo una autorización técnica de mezcla.</p></div>}
+      <div className="rec-measures"><div className="rec-measure-head">2 · Inventario físico antes y después de descargar</div><div className="rec-form-grid">
+        <label>Hora/fecha de medición ANTES<input required type="datetime-local" value={form.startedAt} onChange={e=>change('startedAt',e.target.value)}/></label>
+        <label>Altura inicial (mm)<input required type="number" min={calibration?.minMm??0} max={calibration?.maxMm??undefined} step="any" value={form.startHeightMm} onChange={e=>change('startHeightMm',e.target.value)}/><small>{initialL===null?'Necesita tabla/medida válida':`${show(initialL)} L según tabla`}</small></label>
+        <label>Hora/fecha de medición DESPUÉS<input required type="datetime-local" value={form.finishedAt} onChange={e=>change('finishedAt',e.target.value)}/></label>
+        <label>Altura final (mm)<input required type="number" min={calibration?.minMm??0} max={calibration?.maxMm??undefined} step="any" value={form.endHeightMm} onChange={e=>change('endHeightMm',e.target.value)}/><small>{finalL===null?'Necesita tabla/medida válida':`${show(finalL)} L según tabla`}</small></label>
+      </div>{tank&&!calibration&&<p className="alert error">Carga primero la tabla volumétrica de este tanque en Configuración.</p>}</div>
+      <div className="rec-measures"><div className="rec-measure-head">3 · Otros ingresos durante el intervalo (si existen)</div><div className="rec-form-grid"><label>Volumen otros ingresos (L)<input type="number" min="0" step="any" required value={form.otherIncomeLiters} onChange={e=>change('otherIncomeLiters',e.target.value)}/></label><label>Documento otros ingresos<input value={form.otherIncomeDocument} maxLength={100} onChange={e=>change('otherIncomeDocument',e.target.value)}/></label></div></div>
+      <div className="rec-measures"><div className="rec-measure-head">4 · Despachos durante la descarga (opcional)</div>
+        <label className="rec-toggle"><input type="checkbox" checked={form.meterMode==='meters'} onChange={e=>setForm(f=>({...f,meterMode:e.target.checked?'meters':'none',meterCoverageComplete:false,meterRows:[]}))}/> Registrar meters antes y después de la recepción</label>
+        {form.meterMode==='meters'&&<><p className="rec-note">Selecciona las mangueras con lectura disponible. Mecánico y digital se guardan por separado; solo el medidor elegido se usa para calcular litros. Si faltan mangueras, el resultado será provisional.</p>
+          {!compatibleHoses.length?<p className="alert error">No hay mangueras vinculadas a este tanque. Puedes desactivar el registro de meters y guardar la recepción como provisional.</p>:<div className="rec-hose-checks">{compatibleHoses.map(h=><label key={h.id}><input type="checkbox" checked={meterRows.some(r=>r.hoseId===h.id)} onChange={e=>chooseHose(h,e.target.checked)}/>{dispensers.find(d=>d.id===h.dispenserId)?.name||'Dispenser'} · {h.name}</label>)}</div>}
+          {meterRows.map(r=><MeterInput key={r.hoseId} hose={hoses.find(h=>h.id===r.hoseId)} dispenser={dispensers.find(d=>d.name===r.dispenserName)} row={r} onChange={row=>editHose(r.hoseId,row)}/>)}
+          <label className="rec-toggle"><input type="checkbox" disabled={!allHosesCovered} checked={form.meterCoverageComplete&&allHosesCovered} onChange={e=>change('meterCoverageComplete',e.target.checked)}/> Confirmo que no hubo otros despachos sin registrar desde este tanque durante las mediciones</label>
+          {!allHosesCovered&&<p className="rec-note">Aún faltan mangueras vinculadas a este tanque. Si registraste solo algunas, la diferencia permanece provisional.</p>}
+        </>}
+      </div>
+      {form.productCode!==form.priorProductCode&&form.meterMode==='meters'&&<p className="rec-warning"><AlertTriangle size={17}/> Si una misma manguera vendió ambos combustibles entre las lecturas, sus metros totales no permiten separarlos por producto. Registra lecturas en el cambio de combustible o deja el desglose contable pendiente; no inventes litros por tipo.</p>}
+      <div className="rec-measures rec-calculation"><div className="rec-measure-head">5 · Resultado automático de recepción / diferencia de transporte</div>
+      <div className="rec-results"><div><small>Saldo inicial</small><b>{show(initialL)} L</b></div><div><small>Saldo final</small><b>{show(finalL)} L</b></div><div><small>Despachos durante descarga</small><b>{preview?.salesDuringReceptionL===null?'No verificados':`${show(preview.salesDuringReceptionL)} L`}</b></div><div><small>Volumen recibido calculado</small><b>{show(preview?.physicalReceivedL)} L</b></div><div><small>Merma / demasía transporte</small><b className={preview?.transportDifferenceL<0?'rec-negative':preview?.transportDifferenceL>0?'rec-positive':''}>{show(preview?.transportDifferenceL)} L</b></div></div>
+      <p className="rec-equation">Volumen recibido = saldo físico final − saldo físico inicial + despachos medidos − otros ingresos. Diferencia transporte = recibido − volumen documentado.</p></div>
+      {preview?.quality==='provisional'&&<p className="rec-warning"><AlertTriangle size={17}/> Diferencia provisional: pueden existir ventas durante la descarga no medidas. No clasificar automáticamente esta cifra como merma o demasía definitiva.</p>}
+      {previewError&&<p className="alert error">{previewError}</p>}{error&&<p className="alert error">{error}</p>}
+      <label>Observación<input value={form.observation} maxLength={1000} onChange={e=>change('observation',e.target.value)} placeholder="Incidencias, movimientos simultáneos, procedimiento de recepción..."/></label>
+      <div className="rec-form-actions"><button type="button" className="secondary" onClick={onClose}>Cancelar</button><button type="submit" className="primary" disabled={busy||!preview||!calibration}>{busy?'Guardando…':'Guardar recepción'}</button></div>
+    </form>
+  </section>;
+}
+export default function ReceptionBook({stationId,uid,tanks,dispensers,hoses,canManage}){
+  const [month,setMonth]=useState(localDate().slice(0,7)),[product,setProduct]=useState('todos'),[showForm,setShowForm]=useState(false),[message,setMessage]=useState(''),[error,setError]=useState(''),[voiding,setVoiding]=useState(null),[reason,setReason]=useState(''),[busy,setBusy]=useState(false);
+  const formRef=useRef(null);
+  useEffect(()=>{if(showForm&&formRef.current){formRef.current.scrollIntoView({block:'start',behavior:'smooth'});}},[showForm]);
+  const {items:calibrations}=useDocuments(()=>stationPath(stationId,'calibrations'),[stationId]);
+  const {items:receipts,loading,error:loadError}=useDocuments(()=>query(stationPath(stationId,'receptions'),where('month','==',month)),[stationId,month]);
+  const active=sortRegistered(tanks.filter(t=>t.productCode!=='GNV'));
+  const products=Array.from(new Set(active.flatMap(t=>familyProducts(t.productCode))));
+  const visible=useMemo(()=>receipts.filter(r=>product==='todos'||r.productCode===product).sort((a,b)=>b.date.localeCompare(a.date)||String(b.finishedAt).localeCompare(String(a.finishedAt))),[receipts,product]);
+  const valid=visible.filter(x=>x.status==='vigente');
+  const documented=valid.reduce((s,r)=>s+(r.documentLiters||0),0),received=valid.reduce((s,r)=>s+(r.physicalReceivedL||0),0);
+  const confirmed=valid.filter(r=>r.quality==='verificable_con_meters');
+  const confirmDiff=confirmed.reduce((s,r)=>s+(r.transportDifferenceL||0),0);
+  async function cancel(){setError('');setBusy(true);try{await voidReception(stationId,voiding,uid,reason);setMessage('Recepción anulada. El registro queda conservado para auditoría.');setVoiding(null);setReason('');}catch(e){setError(e.message);}finally{setBusy(false);}}
+  return <div className="ops-page rec-page"><div className="rec-header"><div><span className="ivs-overline">CONTROL OPERATIVO · RECEPCIONES</span><h2>Recepciones de cisternas</h2><p>Libro mensual y planilla de descarga en la misma pestaña, como en la matriz. Primero registramos, después se consolidan los movimientos.</p></div>{canManage&&<button type="button" className="primary" onClick={()=>setShowForm(v=>!v)}><Plus size={16}/> {showForm?'Cerrar registro':'Nueva recepción'}</button>}</div>
+    {message&&<p className="alert success">{message}</p>}{loadError&&<p className="alert error">{loadError}</p>}
+    {showForm&&<div ref={formRef} className="rec-inline-entry"><ReceptionPanelGuard onClose={()=>setShowForm(false)}><ReceptionForm stationId={stationId} uid={uid} tanks={tanks} dispensers={dispensers} hoses={hoses} calibrations={calibrations} onClose={()=>setShowForm(false)} onSaved={setMessage}/></ReceptionPanelGuard></div>}
+    {!showForm&&<section className="rec-summary"><div><small>Recepciones vigentes</small><b>{valid.length}</b></div><div><small>Documentado</small><b>{show(documented)} L</b></div><div><small>Recibido calculado</small><b>{show(received)} L</b></div><div><small>Diferencia con meters completos*</small><b>{show(confirmDiff)} L</b></div></section>
+    {!showForm&&<section className="panel"><div className="rec-filters"><label>Mes<input type="month" value={month} onChange={e=>setMonth(e.target.value)}/></label><label>Producto<select value={product} onChange={e=>setProduct(e.target.value)}><option value="todos">Todos los líquidos</option>{products.map(p=><option key={p} value={p}>{codeName[p]}</option>)}</select></label></div>
+      <div className="rec-table-wrap"><table className="rec-table"><thead><tr><th>Fecha</th><th>Documento</th><th>Tanque / producto</th><th>Inicial</th><th>Final</th><th>Documento L</th><th>Recibido L</th><th>Dif. transporte</th><th>Estado</th><th>Acciones</th></tr></thead><tbody>
+      {visible.map(r=><tr key={r.id} className={r.status==='anulada'?'rec-voided':''}><td>{r.date?.split('-').reverse().join('/')}</td><td>{r.documentNumber}<small>{r.supplier}</small></td><td><span className="ops-dot" style={{background:colorForProduct(r.productCode)}}/> {r.tankName}<small>{codeName[r.productCode]}{r.productCode!==r.priorProductCode?' · CAMBIO DE PRODUCTO':''}</small></td><td>{show(r.startVolumeL)}</td><td>{show(r.endVolumeL)}</td><td>{show(r.documentLiters)}</td><td>{show(r.physicalReceivedL)}</td><td className={r.transportDifferenceL<0?'rec-negative':r.transportDifferenceL>0?'rec-positive':''}>{show(r.transportDifferenceL)}</td><td><span className={'rec-status '+(r.quality==='verificable_con_meters'&&r.status==='vigente'?'verified':'tentative')}>{receiptDisplayStatus(r)}</span></td><td>{canManage&&r.status==='vigente'&&<button type="button" className="secondary rec-small-button" onClick={()=>{setVoiding(r);setReason('');setError('');}}>Anular</button>}</td></tr>)}
+      {!visible.length&&<tr><td colSpan="10" className="rec-empty">{loading?'Consultando recepciones…':'Todavía no existen recepciones para este mes y producto.'}</td></tr>}
+      </tbody></table></div><p className="rec-note">*Suma solo recepciones cuyos meters y cobertura declaró completos el operador; aún necesitan revisión administrativa. Las provisionales no se convierten automáticamente en mermas definitivas.</p>
+    </section>}
+    <section className="panel rec-help"><Info size={20}/><div><b>Combustible remanente y carga muerta</b><p>Cuando un tanque conserva gasolina o diésel anterior bajo la succión de la bomba, el inventario físico mide el volumen total de líquidos, no la composición por producto. La recepción conserva el combustible entrante y el remanente contable declarado por separado. El reparto contable definitivo por producto se conciliará en Movimientos, con meters, recepciones y los documentos del cambio de combustible.</p></div></section>
+    {voiding&&<div className="modal-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget)setVoiding(null)}}><section className="modal"><div className="modal-head"><h2>Anular recepción</h2><button className="close" type="button" onClick={()=>setVoiding(null)}>×</button></div><p>Documento {voiding.documentNumber} del {voiding.date}. La operación no se borrará; se marcará anulada y dejará de sumar en el resumen.</p><label>Motivo de anulación<textarea rows={3} minLength={8} required value={reason} onChange={e=>setReason(e.target.value)} placeholder="Indica el error y cómo se corregirá…"/></label>{error&&<p className="alert error">{error}</p>}<div className="form-buttons"><button type="button" className="secondary" onClick={()=>setVoiding(null)}>Cancelar</button><button className="primary" disabled={busy||reason.trim().length<8} onClick={cancel}>Anular y conservar historial</button></div></section></div>}
+  </div>;
+}

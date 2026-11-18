@@ -1,0 +1,27 @@
+.intl-settings,.intl-ledger{border-top:3px solid #8b633e}
+.intl-settings .section-title,.intl-ledger .section-title{margin-bottom:12px}
+.intl-rate-row{border:1px solid #dce7ec;padding:14px 16px;border-radius:12px;margin:11px 0;background:#fff}
+.intl-rate-header{display:flex;flex-direction:column;gap:5px}
+.intl-rate-header strong{color:#243b47}
+.intl-rate-header small,.intl-guidance{color:#5c7381;font-size:13px;line-height:1.65}
+.intl-rate-form,.intl-deposit-form{display:grid;grid-template-columns:repeat(auto-fit,minmax(165px,1fr));gap:10px;align-items:end;margin-top:12px}
+.intl-rate-form label,.intl-deposit-form label{display:flex;flex-direction:column;gap:5px;font-weight:600;font-size:12px;color:#39596c}
+.intl-rate-form input,.intl-deposit-form input{max-width:100%;min-width:0;background:#fff;border:1px solid #d0e0e8;border-radius:8px;padding:10px;color:#203e50}
+.intl-rate-form button,.intl-deposit-form button{align-self:end;min-height:41px}
+.intl-rate-history{display:flex;flex-direction:column;gap:8px;margin-top:10px;padding:10px;background:#f5f8fa;font-size:12px}
+.intl-rate-history a{margin-left:8px;text-decoration:underline;color:#287c96}
+.intl-feedback{display:block;grid-column:1/-1;color:#286474;font-size:13px}
+.intl-meter-rate{display:block;max-width:225px;line-height:1.4;color:#876142;font-weight:600}
+.intl-guidance{background:#faf7f0;border-left:3px solid #c19862;padding:9px 12px;margin-top:13px}
+.intl-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin:14px 0}
+.intl-kpis div{padding:13px;background:#f7fafb;border:1px solid #d9e5e9;border-radius:11px;display:flex;flex-direction:column;gap:6px}
+.intl-kpis span{font-size:12px;color:#60798b}
+.intl-kpis b{font-size:19px;color:#234554;font-variant-numeric:tabular-nums}
+.intl-table-wrap{overflow-x:auto;max-width:100%}
+.intl-table{min-width:650px;width:100%;border-collapse:collapse;font-size:13px;margin:10px 0}
+.intl-table th{background:#eff4f6;text-align:left;color:#375365}
+.intl-table td,.intl-table th{padding:10px 12px;border-bottom:1px solid #dde8ec;white-space:nowrap}
+.intl-ledger details{margin:12px 0}
+.intl-ledger summary,.intl-rate-row summary{cursor:pointer;color:#365b70;font-weight:600;margin-top:10px}
+.intl-deposit-form h3,.intl-deposit-form p{grid-column:1/-1;margin:4px 0}
+@media(max-width:600px){.intl-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.intl-kpis b{font-size:16px}}

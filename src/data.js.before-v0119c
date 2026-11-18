@@ -1,0 +1,112 @@
+import {
+  addDoc, collection, doc, getDoc, onSnapshot, query, where,
+  serverTimestamp, setDoc, writeBatch, updateDoc
+} from 'firebase/firestore';
+import { db } from './firebase';
+
+export const productCatalog = [
+  {code:'GE', name:'Gasolina Especial', unit:'L'},
+  {code:'GE_PLUS', name:'Gasolina Especial Plus', unit:'L'},
+  {code:'DO', name:'Diésel Oil', unit:'L'},
+  {code:'D_ULS', name:'Diésel ULS', unit:'L'},
+  {code:'GNV', name:'Gas Natural Vehicular', unit:'m³'}
+];
+export const lowerEmail = email => email.trim().toLowerCase();
+export const stationPath = (id, coll) => collection(db, 'stations', id, coll);
+export const watchCollection = (path, cb, error, filters = []) =>
+  onSnapshot(filters.length ? query(path, ...filters) : path,
+    snap => cb(snap.docs.map(d => ({id: d.id, ...d.data()}))), error);
+
+export async function createStation({name, type, city, adminEmail, adminName, uid}) {
+  const email = lowerEmail(adminEmail);
+  if (!name.trim() || !email) throw new Error('Completa el nombre y el correo del administrador.');
+  if ((await getDoc(doc(db, 'invitations', email))).exists())
+    throw new Error('Ese correo ya tiene una invitación registrada. Revisa el panel de invitaciones.');
+  const stationRef = doc(collection(db, 'stations'));
+  const batch = writeBatch(db);
+  batch.set(stationRef, {name:name.trim(), type, city:city.trim(), adminEmail:email,
+    active:true, createdBy:uid, createdAt:serverTimestamp()});
+  batch.set(doc(db, 'invitations', email), {email, name:adminName.trim(), role:'admin',
+    stationId:stationRef.id, status:'pending', createdBy:uid, createdAt:serverTimestamp()});
+  await batch.commit();
+  return stationRef.id;
+}
+export async function inviteOperator({email, name, stationId, uid}) {
+  const normalized = lowerEmail(email);
+  if (!normalized || !name.trim()) throw new Error('Completa el nombre y correo del operador.');
+  // Para administradores no consultamos un documento inexistente: las reglas
+  // de Firestore no permiten leer invitaciones ajenas y la creación se valida
+  // en el servidor. Un correo ya existente hará fallar el setDoc (update denegado).
+  await setDoc(doc(db, 'invitations', normalized), {email:normalized, name:name.trim(),
+    role:'operator', stationId, status:'pending', createdBy:uid, createdAt:serverTimestamp()});
+}
+export async function acceptInvitation(user) {
+  await user.reload();
+  await user.getIdToken(true);
+  if (!user.emailVerified) throw new Error('Verifica primero tu correo electrónico y vuelve a intentarlo.');
+  const email = lowerEmail(user.email || '');
+  const invitationRef = doc(db, 'invitations', email);
+  const invitation = await getDoc(invitationRef);
+  if (!invitation.exists() || invitation.data().status !== 'pending')
+    throw new Error('No hay una invitación pendiente para ese correo. Solicítala al propietario o administrador.');
+  const i = invitation.data();
+  const batch = writeBatch(db);
+  batch.set(doc(db, 'users', user.uid), {
+    displayName:i.name, email, role:i.role, stationId:i.stationId,
+    active:true, createdAt:serverTimestamp()
+  });
+  batch.update(invitationRef, {status:'accepted', acceptedUid:user.uid, acceptedAt:serverTimestamp()});
+  await batch.commit();
+}
+export async function toggleActive(uid, current) {
+  return updateDoc(doc(db, 'users', uid), {active: !current});
+}
+export async function toggleProduct(stationId, p, active) {
+  return setDoc(doc(db, 'stations',stationId,'products',p.code), {
+    code:p.code, name:p.name, unit:p.unit, active, updatedAt:serverTimestamp()
+  });
+}
+export async function createTank(stationId, name, code, capacity) {
+  const val = Number(capacity);
+  if (!name.trim() || !code || !(val > 0)) throw new Error('Ingresa un tanque, producto y capacidad válidos.');
+  return addDoc(stationPath(stationId, 'tanks'), {name:name.trim(), productCode:code,
+    capacityLiters:val, active:true, createdAt:serverTimestamp()});
+}
+export async function createCylinder(stationId,{name,bankName,waterCapacityLiters,maxPressureBar}) {
+  const liters=Number(waterCapacityLiters),bar=maxPressureBar===''?0:Number(maxPressureBar);
+  if(!name.trim()||!(liters>0)||!Number.isFinite(bar)||bar<0) throw new Error('Completa nombre, capacidad geométrica y presión válida.');
+  return addDoc(stationPath(stationId,'tanks'),{
+    name:name.trim(),kind:'gnv_cylinder',productCode:'GNV',waterCapacityLiters:liters,
+    bankName:bankName.trim(),maxPressureBar:bar,active:true,createdAt:serverTimestamp()
+  });
+}
+export async function createDispenser(stationId, name) {
+  if (!name.trim()) throw new Error('Ingresa un nombre de dispenser.');
+  return addDoc(stationPath(stationId,'dispensers'), {name:name.trim(), active:true, createdAt:serverTimestamp()});
+}
+const validateMeterTypes = types => {
+  if (!Array.isArray(types) || types.length < 1 || types.length > 2 ||
+      new Set(types).size !== types.length ||
+      !types.every(type => ['mecanico', 'digital'].includes(type))) {
+    throw new Error('Selecciona meter mecánico, digital o ambos.');
+  }
+};
+export async function createHose(stationId, {name, dispenserId, feedTankIds, meterTypes, productCode}) {
+  if (!name.trim() || !dispenserId || !productCode ||
+      (productCode !== 'GNV' && !feedTankIds.length))
+    throw new Error('Completa nombre, dispenser, producto y alimentación correspondiente.');
+  if(productCode === 'GNV' && feedTankIds.length)
+    throw new Error('Las mangueras GNV se asocian a la línea de gas, no a un tanque de líquidos.');
+  validateMeterTypes(meterTypes);
+  return addDoc(stationPath(stationId,'hoses'), {
+    name:name.trim(), dispenserId, productCode, feedTankIds, meterTypes,
+    active:true, createdAt:serverTimestamp()
+  });
+}
+export async function updateHoseMeters(stationId, hoseId, meterTypes) {
+  validateMeterTypes(meterTypes);
+  return updateDoc(doc(db,'stations',stationId,'hoses',hoseId), {
+    meterTypes, meterConfigUpdatedAt:serverTimestamp()
+  });
+}
+export { collection, doc, db, onSnapshot, where };

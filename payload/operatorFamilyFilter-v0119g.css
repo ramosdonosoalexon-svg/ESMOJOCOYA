@@ -1,0 +1,8 @@
+/* v0.11.9g — filtro por familia para no mezclar GNV con gasolinas */
+.pilot-family-tabs{display:flex;gap:6px;flex-wrap:wrap;margin:7px 0}
+.pilot-family-tabs button{border:1px solid #9bb5ce;border-radius:9px;padding:8px 10px;background:#fff;color:#23445c;font-weight:750;font-size:.82rem}
+.pilot-family-tabs button.active{background:#dcedfc;color:#104b7d;border-color:#5798d0}
+.pilot-family-caption{display:flex;align-items:center;justify-content:space-between;gap:6px;flex-wrap:wrap;padding:8px 2px 5px}
+.pilot-family-caption b{font-size:.93rem}
+.pilot-family-caption small{font-size:.7rem;color:#71849a}
+@media print{.pilot-family-tabs,.pilot-family-caption{display:none!important}}

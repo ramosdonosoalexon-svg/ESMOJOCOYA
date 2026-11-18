@@ -1,0 +1,148 @@
+.movement-book{display:flex;flex-direction:column;gap:18px}
+.movement-intro{display:flex;justify-content:space-between;align-items:center;gap:12px;border-bottom:1px solid #d9e2e9;padding:8px 4px 17px}.movement-intro h2{font-size:24px;margin:0 0 4px}.movement-intro p{margin:0;color:#617589}.movement-intro svg{color:#3c6779}
+.movement-section{border-left:5px solid var(--movement-color,#396b83);padding:22px 24px!important;min-width:0}
+.movement-heading{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:17px;flex-wrap:wrap}.movement-heading h2{font-size:20px;margin:0 0 4px}.movement-heading p{margin:0;color:#667b8c;font-size:13px}
+.movement-monthbar{display:flex;align-items:flex-end;gap:7px}.movement-monthbar label{display:flex;flex-direction:column;gap:2px;color:#657b8e;font-size:11px}.movement-monthbar input{padding:8px 10px;border:1px solid #ccdbe5;border-radius:9px;min-width:160px;color:#183749;background:#fff}.movement-monthbar .movement-arrow{padding:8px!important;width:36px;height:37px;display:inline-flex;justify-content:center;align-items:center}
+.movement-explanation{display:flex;align-items:flex-start;gap:8px;background:#f3f7fa;border:1px solid #e0e9ee;padding:10px 12px;border-radius:10px;font-size:12px;color:#577184;margin:0 0 12px}.movement-explanation svg{flex:none}
+.movement-scroll{overflow-x:auto;border:1px solid #e0e7ed;border-radius:12px}.movement-table{border-collapse:separate;border-spacing:0;width:100%;font-size:12px;min-width:500px;white-space:nowrap}
+.movement-table th,.movement-table td{padding:10px 11px;border-bottom:1px solid #e5edf2;text-align:right}.movement-table th{font-weight:650}.movement-table .movement-groups th{background:#eef3f7;color:#2e5163;border-right:1px solid #dce6ed;text-align:center}.movement-table .movement-labels th{background:#f7f9fb;color:#557083;font-weight:600;white-space:normal;min-width:90px;text-align:center}.movement-table .movement-date{position:sticky;left:0;z-index:1;background:#fff;text-align:left!important;min-width:60px}.movement-table thead .movement-date{background:#eef3f7;z-index:2}.movement-table tbody tr:hover td{background:#f6fafc}.movement-table tbody tr:hover .movement-date{background:#f6fafc}
+.movement-row-empty td{color:#a4b3bc}.movement-table .movement-loss{color:#b72f36;font-weight:650}.movement-table .movement-surplus{color:#128261;font-weight:650}.movement-table sup{color:#a35a15;font-size:10px}.movement-state{text-align:center!important;font-size:11px;color:#597184}.movement-note-btn{border:0;background:transparent;color:#829aaa;cursor:pointer;padding:5px;border-radius:6px}.movement-note-btn:hover,.movement-note-btn.has-note{color:#126e76;background:#e7f3f4}.movement-note-cell{padding:12px 18px!important;background:#f5f9fa}.movement-note-editor{max-width:590px;white-space:normal}.movement-note-editor form{display:flex;flex-direction:column;gap:8px}.movement-note-editor textarea{width:100%;padding:9px 10px;border:1px solid #cbdbe5;border-radius:8px}.movement-note-editor form>div{display:flex;gap:8px;justify-content:flex-end}.movement-note-editor button{display:inline-flex;align-items:center;gap:5px}.movement-error{color:#b72f36;font-size:12px}
+.movement-empty{padding-top:12px;color:#768f9c;font-size:13px}.movement-footer{display:flex;gap:7px;color:#6d7f8d;font-size:12px;align-items:flex-start}.movement-footer svg{flex:none}
+@media(max-width:780px){.movement-section{padding:15px 12px!important}.movement-heading h2{font-size:18px}.movement-monthbar{width:100%}.movement-table th,.movement-table td{padding:8px 9px}}
+
+/* Domingo: referencia del calendario, nunca bloqueo de registros ni presunción de ausencia de ventas. */
+.movement-table tbody tr.report-sunday-row td{background:#fff4f4}
+.movement-table tbody tr.report-sunday-row .movement-date{background:#ffeded}
+.report-sunday-label{display:inline-block;margin-left:6px;color:#ad4248;font-size:9px;font-style:normal;font-weight:800;letter-spacing:.04em}
+
+/* Estimación visual de mezcla, nunca medición química. */
+.movement-mixture-grids{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;margin:12px 0}
+.movement-mixture-card{border:1px solid #d6e3e9;border-radius:12px;background:#f9fcfd;padding:12px}
+.movement-mixture-caption{display:flex;justify-content:space-between;gap:10px;align-items:center;font-size:.88rem;margin-bottom:10px}
+.movement-mixture-caption span{font-size:.8rem;color:#607789}
+.movement-mixture-bar{display:flex;overflow:hidden;width:100%;height:26px;border-radius:10px;background:repeating-linear-gradient(45deg,#e5eef3,#e5eef3 10px,#f7fafc 10px,#f7fafc 20px);border:1px solid #d7e1e6}
+.movement-mixture-bar>div{height:100%;min-width:0;transition:width .25s}
+.movement-mixture-legend{display:flex;gap:11px;flex-wrap:wrap;font-size:.78rem;margin-top:10px}
+.movement-mixture-legend span{display:flex;align-items:center;gap:5px}
+.movement-mixture-legend i{width:9px;height:9px;border-radius:50%;display:inline-block}
+.movement-mixture-card details{margin-top:13px;font-size:.79rem;color:#527082}
+.movement-mixture-card summary{cursor:pointer;font-weight:650}
+.movement-mixture-events{margin-top:9px;max-height:200px;overflow:auto}
+.movement-mixture-events>div{display:flex;flex-wrap:wrap;gap:8px;justify-content:space-between;padding:6px 2px;border-bottom:1px solid #e3eef2}
+
+/* v0.9.6: detalle verificable de las salidas dentro del mismo meter */
+.movement-breakdown-btn{border:1px solid #bbd9e0;background:#f1faf9;color:#176775;border-radius:6px;padding:4px 8px;font-size:.69rem;margin-right:5px;cursor:pointer}.movement-breakdown-row{padding:12px 18px!important;background:#f6fafb;color:#345b69;font-size:.78rem}.movement-breakdown-row>div{display:flex;flex-wrap:wrap;gap:7px;margin:8px 0}.movement-breakdown-row>div span{border:1px solid #d0e2e7;border-radius:8px;background:white;padding:7px 9px}.movement-breakdown-row small{color:#687e87}
+
+/* v0.9.7 — alerta de desajuste de volúmenes históricos GNV */
+.movement-book .meter-prm-alert{padding:13px 16px;border:1px solid #e5b49f;border-radius:9px;background:#fff4ee;color:#824227;margin:12px 0;font-size:.84rem}
+.movement-book .meter-prm-alert p{font-size:.8rem;color:#824227;margin:8px 0}
+.movement-book .meter-prm-alert ul{padding-left:20px;margin:8px 0}
+
+/* v0.11.0 — Gasolinas juntas. Negro/café/naranja; rojo/verde exclusivamente en diferencias. */
+.gfv-family{--gfv-black:#263238;--gfv-brown:#89502b;--gfv-amber:#d58b33}
+.gfv-toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:12px 0 13px}
+.gfv-switch{display:inline-flex;gap:7px;align-items:center;justify-content:center;border:1px solid #d4dfe3;border-radius:9px;padding:8px 11px;background:#fff;color:#3c5260;font-size:.78rem;font-weight:700;cursor:pointer}
+.gfv-switch:hover{border-color:#bb8b51;background:#fffcf6}.gfv-switch.gfv-selected{background:#fff7e8;border-color:#bd8e4c;color:#573e25;box-shadow:inset 0 -2px 0 #d58b33}
+.gfv-dot{display:inline-block;width:10px;height:10px;border-radius:50%;background:#d58b33;flex:none}
+.gfv-dark{background:#263238}.gfv-brown{background:#89502b}.gfv-amber{background:#d58b33}
+.gfv-legend{display:flex;flex-wrap:wrap;gap:8px;margin-left:auto;font-size:.70rem;color:#647582}.gfv-legend span{display:inline-flex;align-items:center;gap:5px}
+.gfv-ledger{min-width:1040px}.gfv-ledger td{vertical-align:middle}.gfv-ledger .movement-row-empty{color:#a5afb6}
+.gfv-receipts,.gfv-balance{display:flex;flex-direction:column;align-items:flex-end;gap:4px}.gfv-receipts>b,.gfv-balance>b{color:#263238;font-weight:750}
+.gfv-value{display:inline-block;font-weight:800;font-size:.71rem;line-height:1.3;border-radius:5px;padding:2px 5px;white-space:nowrap}
+.gfv-ge{color:#263238}.gfv-plus{color:#89502b!important}.gfv-receipts .gfv-ge{background:#e8edf0}.gfv-receipts .gfv-plus{background:#f3e7d9}
+.gfv-mini{display:flex;flex-wrap:wrap;align-items:center;gap:4px;justify-content:flex-end;white-space:normal;max-width:210px;font-size:.66rem;font-weight:750}.gfv-mini span{white-space:nowrap}
+.gfv-est-label{color:#ae7129;border:1px solid #f0d7b4;background:#fff9ed;border-radius:4px;padding:1px 3px}
+.gfv-action-cell{white-space:nowrap!important;min-width:85px}.gfv-eye{display:inline-flex;align-items:center;justify-content:center;width:30px;height:28px;border:1px solid #d7bc97;border-radius:7px;color:#8a5d2b;background:#fff9ee;cursor:pointer}
+.gfv-eye:hover{background:#f9e7cc}.gfv-eye:disabled{cursor:default;opacity:.38}.gfv-detail-cell{padding:16px!important;background:#fffcf7!important;text-align:left!important;white-space:normal!important}
+.gfv-detail-head{display:flex;gap:10px;align-items:center;justify-content:space-between;margin-bottom:12px;color:#314958}
+.gfv-close{border:1px solid #dbd7ce;color:#6a614f;border-radius:6px;background:#fff;padding:6px 9px;display:inline-flex;gap:5px;align-items:center;cursor:pointer}
+.gfv-detail-grid{display:grid;grid-template-columns:repeat(2,minmax(210px,1fr));gap:12px}
+.gfv-detail-card{padding:11px 13px;background:#f2f5f5;border-left:4px solid #263238;border-radius:9px;display:flex;flex-direction:column;gap:7px;font-size:.76rem;color:#495d6a}
+.gfv-detail-card>strong{color:#263238}.gfv-detail-plus{background:#fbf3ec;border-color:#89502b}.gfv-detail-plus>strong{color:#89502b}
+.gfv-composition-track{width:100%;display:flex;height:13px;background:#e9edf0;overflow:hidden;border-radius:16px;margin:12px 0 5px;border:1px solid #e2e5e6}.gfv-composition-track span{height:100%;display:block}
+.gfv-detail-cell>small,.gfv-disclaimer{font-size:.73rem;line-height:1.5;color:#6b7b84}.gfv-quality-note{font-size:.74rem;color:#98642b;margin:8px 0 0}
+.gfv-filtered{margin-top:12px}.gfv-filtered>.movement-section{margin:0;border-color:#dee6e9;border-left-width:1px;box-shadow:none}
+@media(max-width:800px){.gfv-legend{margin-left:0}.gfv-detail-grid{grid-template-columns:1fr}.gfv-family .movement-heading{gap:8px}}
+
+/* v0.11.1: fila horizontal limpia; solo el ojo abre cifras GE/GE+ estimadas. */
+.gfv-ledger td{white-space:nowrap;vertical-align:middle}
+.gfv-single-amount,.gfv-single-balance{display:inline-flex;align-items:center;justify-content:flex-end;gap:5px;white-space:nowrap;font-size:inherit;font-weight:700;line-height:1.2}
+.gfv-inline-receipts{display:inline-flex;align-items:center;justify-content:flex-end;gap:5px;white-space:nowrap;font-size:.78rem;line-height:1.2}
+.gfv-inline-receipts b{font-weight:750}
+.gfv-mix-mark{display:inline-flex;width:19px;height:6px;border-radius:4px;overflow:hidden;flex:none;background:#ecded2;border:1px solid #d2c6b9}
+.gfv-mix-mark i{display:block;height:100%;min-width:0}
+.gfv-ledger .gfv-action-cell{white-space:nowrap}
+.gfv-ledger .gfv-eye{width:27px;height:26px;background:transparent;border-color:transparent;color:#8a5d2b;padding:3px}
+.gfv-ledger .gfv-eye:hover,.gfv-ledger .gfv-eye:focus-visible{border-color:#d7bc97;background:#fff5e8}
+.gfv-ledger .gfv-detail-cell{white-space:normal}
+
+/* v0.11.3 — GNV en formato matriz: PRM / desglose de metros / diferencia / %. */
+.gnv-matrix-section{--gnv-green:#72a943}
+.gnv-matrix-table{min-width:1430px}
+.gnv-matrix-table .movement-groups.gnv-matrix-top th{background:#e0f0d1;color:#254a32;border-color:#b5d393;font-size:.75rem}
+.gnv-matrix-table .movement-labels th{background:#f0f6ec;color:#3c5960;min-width:86px;font-size:.71rem}
+.gnv-matrix-table .movement-labels th:nth-child(2),.gnv-matrix-table .movement-labels th:nth-child(3){min-width:110px}
+.gnv-matrix-table .movement-date{min-width:72px}
+.gnv-matrix-table .gnv-percentage-head{background:#f6f8f0!important;border-left:2px dashed #a5b68f!important;min-width:107px;max-width:115px}
+.gnv-matrix-table td.gnv-percent-cell{border-left:2px dashed #b6c4a9;text-align:center;font-weight:800}
+.gnv-matrix-table .movement-loss,.gnv-summary-grid .movement-loss,.gnv-detail-grid .movement-loss{color:#b12d35!important;font-weight:800}
+.gnv-matrix-table .movement-surplus,.gnv-summary-grid .movement-surplus,.gnv-detail-grid .movement-surplus{color:#117c5c!important;font-weight:800}
+.gnv-matrix-table .gnv-obs{white-space:nowrap;min-width:74px}
+.gnv-detail-eye{border:0;vertical-align:middle;background:transparent;cursor:pointer;color:#57768c;padding:5px;border-radius:6px}
+.gnv-detail-eye:hover{background:#eef6f9;color:#116982}
+.gnv-summary-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin:12px 0}
+.gnv-summary-grid>div{border:1px solid #deeadb;border-radius:10px;padding:10px 12px;background:#fbfdf9;display:flex;flex-direction:column;gap:5px;min-width:0}
+.gnv-summary-grid span{font-size:.72rem;color:#587181}
+.gnv-summary-grid b{font-size:1.03rem;color:#254352;white-space:nowrap}
+.gnv-reference-note{font-size:.77rem;color:#607783;margin:4px 0 12px}
+.gnv-risk{border:1px solid #d8d0ad;border-radius:10px;padding:11px 13px;margin-bottom:12px;font-size:.82rem}
+.gnv-risk p{margin:5px 0 0;font-size:.77rem;line-height:1.5}
+.gnv-risk-warning{background:#fffbeb;color:#8b5a16;border-color:#efd194}
+.gnv-risk-critical{background:#fff0ee;color:#9d252c;border-color:#e8a8a0}
+.gnv-risk-warning-text{color:#a46523;font-size:.77rem;margin:8px 0}
+.gnv-detail-cell{background:#f8fbfa!important;text-align:left!important;white-space:normal!important;padding:15px!important;font-size:.82rem;color:#345362}
+.gnv-detail-cell small{font-size:.74rem;color:#697b81}
+.gnv-detail-grid{display:grid;grid-template-columns:repeat(2,minmax(180px,1fr));gap:8px;margin:10px 0}
+.gnv-footnote{margin:12px 0 0;color:#607783;font-size:.75rem;line-height:1.5}
+@media(max-width:800px){.gnv-summary-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.gnv-detail-grid{grid-template-columns:1fr}}
+
+.gnv-surplus-warning{color:#17644e;background:#effaf4;border:1px solid #d2ebdc;padding:9px;border-radius:8px}
+
+/* v0.11.4: Control diario de GNV siempre visible encima de la matriz horizontal. */
+.gnv-daily-panel{margin:12px 0 16px;border:1px solid #d6e5dc;border-radius:12px;overflow:hidden;background:#fff}
+.gnv-daily-heading{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px 15px;background:#f0f6eb;border-bottom:1px solid #d6e5dc}
+.gnv-daily-heading h3{font-size:.91rem;line-height:1.3;margin:0;color:#274c37;font-weight:750}
+.gnv-daily-heading p{font-size:.75rem;color:#597181;margin:3px 0 0;line-height:1.4}
+.gnv-daily-heading>span{font-size:.72rem;color:#4d7261;white-space:nowrap;font-weight:700}
+.gnv-daily-wrap{width:100%;overflow-x:auto}
+.gnv-daily-table{border-collapse:separate;border-spacing:0;width:100%;table-layout:fixed;font-size:.83rem}
+.gnv-daily-table th,.gnv-daily-table td{padding:11px 12px;border-bottom:1px solid #e6edf0;text-align:right;vertical-align:middle}
+.gnv-daily-table th{font-size:.71rem;line-height:1.25;background:#f8faf7;color:#536b75;font-weight:700;white-space:normal}
+.gnv-daily-table th:first-child,.gnv-daily-table td:first-child{text-align:left;width:92px}
+.gnv-daily-table th:nth-child(4){width:20%}
+.gnv-daily-table th:nth-child(5){width:16%}
+.gnv-daily-table th:last-child,.gnv-daily-table td:last-child{text-align:center;width:14%}
+.gnv-daily-table tbody tr:last-child td{border-bottom:0}
+.gnv-daily-table .gnv-daily-date{color:#24475a;white-space:nowrap}
+.gnv-daily-table .gnv-daily-date small{font-size:.65rem;color:#ab4e4e;margin-left:5px;font-weight:700}
+.gnv-daily-table .gnv-daily-sunday td{background:#fff8f7}
+.gnv-daily-table .movement-loss{color:#b72f36;font-weight:800}
+.gnv-daily-table .movement-surplus{color:#128261;font-weight:800}
+.gnv-daily-status{font-size:.7rem;font-weight:750;border-radius:999px;padding:4px 8px;display:inline-block;white-space:nowrap;background:#eaf0f3;color:#657681}
+.gnv-daily-merma{background:#fff0ef;color:#b72f36}
+.gnv-daily-demasia{background:#e9f6ef;color:#0f7857}
+.gnv-daily-igual{background:#eff5f7;color:#516c77}
+.gnv-daily-empty{text-align:center!important;color:#697e89;padding:20px!important}
+.gnv-daily-help{padding:9px 15px;margin:0;font-size:.73rem;color:#607783;border-top:1px solid #e8edf0;line-height:1.5}
+@media(max-width:720px){
+  .gnv-daily-table th:nth-child(2),.gnv-daily-table td:nth-child(2),
+  .gnv-daily-table th:nth-child(3),.gnv-daily-table td:nth-child(3){display:none}
+  .gnv-daily-table th:first-child,.gnv-daily-table td:first-child{width:70px}
+  .gnv-daily-table th:nth-child(4){width:33%}
+  .gnv-daily-table th:nth-child(5){width:28%}
+  .gnv-daily-table th:last-child,.gnv-daily-table td:last-child{width:24%}
+  .gnv-daily-table th,.gnv-daily-table td{padding:10px 6px;font-size:.75rem}
+  .gnv-daily-heading{padding:11px}
+  .gnv-daily-heading p{font-size:.7rem}
+  .gnv-daily-help{padding:9px 11px}
+}

@@ -1,0 +1,65 @@
+import {collection,doc,query,where,onSnapshot,writeBatch,serverTimestamp,setDoc,updateDoc} from 'firebase/firestore';
+import {db} from './firebase';
+import {putLocalPilot,getLocalPilot} from './operatorPilotStorage';
+
+export function watchPilotSettings(stationId,onData,onError){return onSnapshot(doc(db,'stations',stationId,'operatorPilotSettings','control'),snap=>onData(snap.exists()?snap.data():{enabled:false}),onError);}
+export function watchPilotShifts(stationId,uid,canManage,onData,onError){
+  const root=collection(db,'stations',stationId,'operatorPilotShifts');
+  return onSnapshot(canManage?root:query(root,where('operatorUid','==',uid)),snap=>onData(snap.docs.map(d=>({id:d.id,...d.data()}))),onError);
+}
+export function watchPilotReadings(stationId,onData,onError){return onSnapshot(collection(db,'stations',stationId,'operatorPilotReadings'),snap=>onData(snap.docs.map(d=>({id:d.id,...d.data()}))),onError);}
+export async function setPilotEnabled(stationId,uid,enabled){return setDoc(doc(db,'stations',stationId,'operatorPilotSettings','control'),{enabled:Boolean(enabled),updatedBy:uid,updatedAt:serverTimestamp()});}
+export async function reviewPilot(stationId,shiftId,uid,status,note){
+  if(!['revisado','observado'].includes(status))throw Error('Estado de revisión inválido');
+  return updateDoc(doc(db,'stations',stationId,'operatorPilotShifts',shiftId),{reviewStatus:status,reviewNote:String(note||'').slice(0,500),reviewBy:uid,reviewedAt:serverTimestamp()});
+}
+function safeTransport(entry){
+  const {id,stationId,operatorUid,operatorName,kind,startedAt,endedAt,date,status,readings,allocations,payments,note,createdLocalAt}=entry;
+  return {stationId,operatorUid,operatorName,kind,startedAt,endedAt,date,status,readings,allocations,payments,note,createdLocalAt,updatedAt:serverTimestamp()};
+}
+function sharedReadings(entry){
+  const events=[];
+  for(const r of entry.readings||[]){
+    const types=r.meterTypes||['mecanico'];
+    for(const type of types){
+      const phases=entry.kind==='medianoche'?['medianoche']:['inicio','final'];
+      for(const phase of phases){
+        const value=r[`${type}${phase==='inicio'?'Initial':'Final'}`];
+        if(value==null||value==='')continue;
+        const stamp=phase==='inicio'?entry.startedAt:entry.endedAt;
+        // Un día retroactivo NO tiene hora: se conserva su fecha solamente.
+        // El campo observadoAt acepta YYYY-MM-DD según las reglas del piloto.
+        const observedAt=stamp||(entry.kind==='turno'?entry.date:'');
+        if(!observedAt)continue;
+        const safeId=`${entry.id}_${r.hoseId}_${type}_${phase}`;
+        events.push({id:safeId,shiftId:entry.id,operatorUid:entry.operatorUid,operatorName:entry.operatorName,stationId:entry.stationId,hoseId:r.hoseId,hoseName:r.hoseName,meterType:type,phase,reading:Number(value),observedAt,day:entry.date});
+      }
+    }
+  }
+  return events;
+}
+const inFlight = new Map();
+export function syncPilotEntry(entry){
+  if(inFlight.has(entry.id))return inFlight.get(entry.id);
+  const operation=(async()=>{
+  const batch=writeBatch(db);
+  batch.set(doc(db,'stations',entry.stationId,'operatorPilotShifts',entry.id),safeTransport(entry));
+  for(const r of sharedReadings(entry)){const {id,...body}=r;
+    batch.set(doc(db,'stations',entry.stationId,'operatorPilotReadings',id),{...body,updatedAt:serverTimestamp()});
+  }
+  await batch.commit();
+  const latest=await getLocalPilot(entry.id);
+  // Si el operador continuó editando sin esperar, no borrar su siguiente revisión pendiente.
+  if(latest&&latest.localRevision===entry.localRevision){await putLocalPilot({...latest,syncState:'sincronizado'});}
+  })().finally(()=>inFlight.delete(entry.id));
+  inFlight.set(entry.id,operation);
+  return operation;
+}
+export async function flushLocalPilots(stationId,uid){
+  const {listLocalPilots}=await import('./operatorPilotStorage');
+  const pending=(await listLocalPilots(stationId,uid)).filter(x=>x.syncState!=='sincronizado');
+  const results=[];
+  for(const entry of pending){try{await syncPilotEntry(entry);results.push({id:entry.id,ok:true});}
+  catch(error){results.push({id:entry.id,ok:false,error:error.message});}}
+  return results;
+}

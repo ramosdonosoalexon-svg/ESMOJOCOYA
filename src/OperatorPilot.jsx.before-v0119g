@@ -1,0 +1,259 @@
+import React,{useEffect,useMemo,useState} from 'react';
+import {useDocuments} from './hooks';
+import {stationPath} from './data';
+import {activePriceAt} from './priceMath';
+import {pilotSettlement,pilotHoseTotals,compareAdjacentReadings,operatorPilotValidation,r2,r3,allowedConcepts,unitFor} from './operatorPilotMath';
+import {putLocalPilot,listLocalPilots} from './operatorPilotStorage';
+import {watchPilotSettings,watchPilotShifts,watchPilotReadings,setPilotEnabled,reviewPilot,flushLocalPilots,syncPilotEntry} from './operatorPilotData';
+import './operatorPilot.css';
+import {suggestedOpening,shiftDateChange,localDateTime,operativeDate} from './operatorPilotUX';
+import OperatorQRScanner from './OperatorQRScanner.jsx';
+import DispenserPilot3D from './DispenserPilot3D.jsx';
+import {candidateHoses} from './dispenserPilotCatalog.js';
+const money=x=>Number(x||0).toLocaleString('es-BO',{minimumFractionDigits:2,maximumFractionDigits:2});
+const fmt=x=>x==null?'—':Number(x).toLocaleString('es-BO',{maximumFractionDigits:3});
+const isoLocal=d=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+const clockDate=()=>isoLocal(new Date());
+const midnightDay=()=>{const d=new Date();if(d.getHours()<6)d.setDate(d.getDate()-1);return isoLocal(d);};
+const localTime=()=>localDateTime();
+const DEFAULT_PAYMENTS={qr:'',card:'',cash:'',deposit:''};
+const TYPES={prepago:'Vale prepago',postpago:'Vale postpago',consumo_propio:'Consumo propio',calibracion_retorno:'Calibración devuelta',calibracion_venta:'Calibración vendida',limpieza:'Limpieza',otra_salida:'Otra salida'};
+const family=c=>['GE','GE_PLUS'].includes(c)?'Gasolinas':['DO','D_ULS'].includes(c)?'Diésel':'GNV';
+const id=()=>typeof crypto!=='undefined'&&crypto.randomUUID?crypto.randomUUID():`${Date.now()}_${Math.random().toString(36).slice(2)}`;
+function newEntry(stationId,uid,operatorName,kind='turno'){
+ const now=localTime();return {id:`pilot_${id()}`,stationId,operatorUid:uid,operatorName:String(operatorName||'Operador').slice(0,120),kind,date:kind==='medianoche'?midnightDay():clockDate(),startedAt:kind==='turno'?now:'',endedAt:kind==='medianoche'?now:'',status:'borrador',readings:[],allocations:[],payments:{...DEFAULT_PAYMENTS},note:'',createdLocalAt:new Date().toISOString(),localRevision:0,syncState:'pendiente'};
+}
+function hoseLine(h,productCode,price,openings={}){
+ const types=Array.isArray(h.meterTypes)&&h.meterTypes.length?h.meterTypes:[h.meterType||'mecanico'];
+ return {hoseId:h.id,hoseName:h.name,productCode,primary:types.includes('digital')?'digital':types[0],meterTypes:types,
+   mecanicoInitial:openings.mecanico?.value??'',mecanicoFinal:'',digitalInitial:openings.digital?.value??'',digitalFinal:'',priceBs:price??'',openingOrigins:Object.fromEntries(Object.entries(openings).map(([k,v])=>[k,v.source]))};
+}
+const measureTypes={mecanico:'Mec.',digital:'Dig.'};
+function MeterFields({row,onChange,kind}){
+ const types=row.meterTypes||['mecanico'];
+ return <div className="pilot-hose-card">
+   <div className="pilot-between"><b>{row.hoseName}</b><span>{row.productCode}</span></div>
+   <div className="pilot-fields">
+     <label>Producto<select value={row.productCode} onChange={e=>onChange({productCode:e.target.value,priceBs:''})}>
+       {(['GE','GE_PLUS'].includes(row.productCode)?['GE','GE_PLUS']:['DO','D_ULS'].includes(row.productCode)?['DO','D_ULS']:['GNV']).map(p=><option key={p} value={p}>{p}</option>)}
+     </select></label>
+     {kind==='turno'&&types.length>1&&<label>Principal<select value={row.primary} onChange={e=>onChange({primary:e.target.value})}>{types.map(t=><option key={t} value={t}>{measureTypes[t]||t}</option>)}</select></label>}
+     {types.map(type=><React.Fragment key={type}>
+       {kind==='turno'&&<label>{measureTypes[type]} inicial <small className="pilot-source">{row.openingOrigins?.[type]||'Manual'}</small><input inputMode="decimal" type="number" min="0" step="any" value={row[`${type}Initial`]} onChange={e=>onChange({[`${type}Initial`]:e.target.value,openingOrigins:{...(row.openingOrigins||{}),[type]:'Manual'}})}/></label>}
+       <label>{measureTypes[type]} {kind==='medianoche'?'medianoche':'final'}<input inputMode="decimal" type="number" min="0" step="any" value={row[`${type}Final`]} onChange={e=>onChange({[`${type}Final`]:e.target.value})}/></label>
+     </React.Fragment>)}
+     {kind==='turno'&&<label>Precio Bs/{unitFor(row.productCode)}<input inputMode="decimal" type="number" min="0" step="0.001" value={row.priceBs} onChange={e=>onChange({priceBs:e.target.value})}/></label>}
+   </div>
+   {kind==='turno'&&<div className="pilot-volume">Despacho: <b>{fmt(pilotHoseTotals(row).difference)} {unitFor(row.productCode)}</b></div>}
+ </div>;
+}
+function PilotPrint({entry,stationName}){
+ const calc=pilotSettlement(entry);
+ return <section className="pilot-print-doc" aria-label="Arqueo imprimible">
+   <div className="pilot-print-head"><h1>DISTRIGAS LÍQUIDOS — ARQUEO DE PRUEBA</h1><strong>NO CONTABILIZADO · NO OFICIAL</strong></div>
+   <p><b>Estación:</b> {stationName} · <b>Operador:</b> {entry.operatorName}</p>
+   <p><b>Clase:</b> {entry.kind==='medianoche'?'Corte de medianoche':'Turno'} · <b>Fecha:</b> {entry.date} · <b>Inicio:</b> {entry.startedAt||'—'} · <b>Final:</b> {entry.endedAt||'—'}</p>
+   <table><thead><tr><th>Manguera</th><th>Producto</th><th>Meter</th><th>Inicial</th><th>Final</th><th>Despacho</th></tr></thead><tbody>{(entry.readings||[]).map((r,i)=>{const {primary,difference}=pilotHoseTotals(r);return <tr key={i}><td>{r.hoseName}</td><td>{r.productCode}</td><td>{primary}</td><td>{entry.kind==='medianoche'?'—':fmt(r[`${primary}Initial`])}</td><td>{fmt(r[`${primary}Final`])}</td><td>{entry.kind==='medianoche'?'Corte':`${fmt(difference)} ${unitFor(r.productCode)}`}</td></tr>})}</tbody></table>
+   {entry.kind==='turno'&&<><h3>Vales y otras salidas</h3>
+     <table><thead><tr><th>Concepto</th><th>Cliente / motivo</th><th>Referencia</th><th>Producto</th><th>Volumen</th></tr></thead><tbody>{(entry.allocations||[]).map((l,i)=><tr key={i}><td>{TYPES[l.concept]||l.concept}</td><td>{l.customer}</td><td>{l.reference}</td><td>{l.productCode}</td><td>{fmt(l.volume)}</td></tr>)}</tbody></table>
+     <h3>Rendición económica</h3><table><tbody><tr><td>Ventas por meters</td><td>Bs {money(calc.totalSales)}</td></tr><tr><td>Vales / salidas no cobrables</td><td>Bs {money(calc.otherValue)}</td></tr><tr><td>QR / tarjeta</td><td>Bs {money(calc.qr+calc.card)}</td></tr><tr><td>Efectivo esperado</td><td>Bs {money(calc.expectedCash)}</td></tr><tr><td>Efectivo contado + depósitos</td><td>Bs {money(calc.renderedCash)}</td></tr><tr><td><b>Diferencia de caja</b></td><td><b>Bs {money(calc.difference)}</b></td></tr></tbody></table>
+   </>}
+   <p><b>Observaciones:</b> {entry.note||'Sin observaciones'}</p><p>Firma operador: _________________________  Firma revisión: _________________________</p>
+   <small>Documento provisional de pruebas. No sustituye el comprobante de Facturito ni constituye asiento en Meters, Movimientos, ANH o Caja.</small>
+ </section>;
+}
+export default function OperatorPilot({stationId,stationName,uid,profile,canManage=false,hoses=[]}){
+ const name=profile?.displayName||profile?.email||'Operador';
+ const [enabled,setEnabled]=useState(()=>localStorage.getItem('operatorPilotEnabled:'+stationId)==='true'),[settingsReady,setSettingsReady]=useState(()=>localStorage.getItem('operatorPilotEnabled:'+stationId)!==null);
+ const [remote,setRemote]=useState([]),[shared,setShared]=useState([]),[locals,setLocals]=useState([]);
+ const [entry,setEntry]=useState(null),[toPrint,setToPrint]=useState(null),[busy,setBusy]=useState(false);
+ const [error,setError]=useState(''),[notice,setNotice]=useState(''),[online,setOnline]=useState(typeof navigator!=='undefined'?navigator.onLine:true);
+ const [reviewNote,setReviewNote]=useState('');
+ const [step,setStep]=useState('meters'),[scanIndex,setScanIndex]=useState(null);
+ const [hoseView,setHoseView]=useState('3d'),[modelFamily,setModelFamily]=useState(null);
+ const {items:initialMeters}=useDocuments(()=>stationPath(stationId,'initialMeters'),[stationId]);
+ const [midnightReminder,setMidnightReminder]=useState('');
+ const {items:prices}=useDocuments(()=>stationPath(stationId,'priceHistory'),[stationId]);
+ const currentProducts=useMemo(()=>[...new Set(hoses.map(h=>h.productCode).filter(Boolean))],[hoses]);
+ const userRole=profile?.role;
+ const isOperator=!canManage&&userRole==='operator';
+ const sortedHoses=useMemo(()=>[...hoses].filter(h=>h.active!==false).sort((a,b)=>String(a.name).localeCompare(String(b.name))),[hoses]);
+ const refreshLocal=async()=>{try{setLocals(await listLocalPilots(stationId,uid));}catch(e){setError(e.message);}};
+ useEffect(()=>{refreshLocal();if('serviceWorker' in navigator){navigator.serviceWorker.register('/operator-pilot-sw.js').catch(()=>{});}},[stationId,uid]);
+ useEffect(()=>watchPilotSettings(stationId,x=>{setSettingsReady(true);setEnabled(x?.enabled===true);localStorage.setItem('operatorPilotEnabled:'+stationId,String(x?.enabled===true));},e=>{setSettingsReady(true);setError(`No se pudo leer la habilitación: ${e.message}`);}),[stationId]);
+ useEffect(()=>watchPilotShifts(stationId,uid,canManage,setRemote,e=>setError(`No se pudieron leer los arqueos: ${e.message}`)),[stationId,uid,canManage]);
+ useEffect(()=>watchPilotReadings(stationId,setShared,e=>setError(`Lecturas compartidas: ${e.message}`)),[stationId]);
+ useEffect(()=>{const yes=()=>setOnline(true),no=()=>setOnline(false);window.addEventListener('online',yes);window.addEventListener('offline',no);return ()=>{window.removeEventListener('online',yes);window.removeEventListener('offline',no);};},[]);
+ useEffect(()=>{if(!isOperator||!enabled||!online)return;let canceled=false;
+   flushLocalPilots(stationId,uid).then(()=>{if(!canceled)refreshLocal();}).catch(()=>{});
+   return ()=>{canceled=true;};
+ },[online,enabled,stationId,uid,isOperator]);
+ // Avisos mientras la pantalla está abierta. El servicio nativo Android se añadirá a la APK.
+ useEffect(()=>{if(!isOperator||!enabled)return;
+ const check=()=>{const now=new Date(),h=now.getHours(),m=now.getMinutes();
+   const message=(h===23&&m>=30)?m>=50?'Faltan 10 minutos para los meters de medianoche.':'Preparar meters: cierre de medianoche a las 00:00.':h===0&&m<=20?'Registrar o verificar meters del cierre diario.':'';
+   setMidnightReminder(message);
+   if(message){const key=`pilot-midnight-${clockDate()}-${h===23?(m>=50?'50':'30'):'00'}`;
+     if(localStorage.getItem(key)!=='1'){localStorage.setItem(key,'1');if(navigator.vibrate)try{navigator.vibrate([180,120,180]);}catch{}}}
+ };
+ check();const timer=setInterval(check,30000);return ()=>clearInterval(timer);
+ },[enabled,isOperator]);
+ const remoteOwn=remote.filter(x=>x.operatorUid===uid);
+ const combined=useMemo(()=>{const m=new Map(remote.map(x=>[x.id,{...x,syncState:'sincronizado'}]));
+   for(const local of locals){const old=m.get(local.id);if(!old||local.syncState!=='sincronizado')m.set(local.id,local);}
+   return [...m.values()].sort((a,b)=>String(b.createdLocalAt).localeCompare(String(a.createdLocalAt)));
+ },[remote,locals]);
+ const mine=combined.filter(x=>x.operatorUid===uid);
+ const settlement=entry?pilotSettlement(entry):null;
+ const pending=locals.filter(x=>x.syncState!=='sincronizado').length;
+ const selectedProducts=[...new Set((entry?.readings||[]).map(x=>x.productCode))];
+ const isHistorical=Boolean(entry&&entry.date<operativeDate());
+ const midnightDone=shared.filter(e=>e.phase==='medianoche'&&e.day===(entry?.date||clockDate()));
+ const midnightHoseIds=new Set(midnightDone.map(e=>e.hoseId));
+ const midnightMissing=sortedHoses.filter(h=>!midnightHoseIds.has(h.id)&&!(entry?.readings||[]).some(r=>r.hoseId===h.id));
+ const sectorFamilies=new Set((entry?.readings||[]).map(h=>family(h.productCode)));
+ const sameSectorMissing=midnightMissing.filter(h=>sectorFamilies.has(family(h.productCode)));
+ const patchEntry=changes=>setEntry(prev=>({...prev,...changes}));
+ const patchLine=(index,changes)=>setEntry(prev=>({...prev,readings:prev.readings.map((r,i)=>i===index?{...r,...changes}:r)}));
+ function addHose(hoseId){if(!entry)return;
+   const h=sortedHoses.find(h=>h.id===hoseId);if(!h||entry.readings.some(r=>r.hoseId===hoseId))return;
+   const price=activePriceAt(prices,h.productCode,entry.date,entry.startedAt?.slice(11)||'23:59')?.priceBs;
+   const at=entry.startedAt||`${entry.date}T23:59`;
+   const types=Array.isArray(h.meterTypes)&&h.meterTypes.length?h.meterTypes:[h.meterType||'mecanico'];
+   const openings=Object.fromEntries(types.map(type=>[type,suggestedOpening({hoseId:h.id,meterType:type,at,events:shared,initialMeters})]));
+   patchEntry({readings:[...entry.readings,hoseLine(h,h.productCode,price,openings)]});
+ }
+
+ function chooseModelFamily(f){
+   if(!entry||isHistorical&&entry.kind==='turno'&&!entry.startedAt)return;
+   const matches=candidateHoses(sortedHoses,f,(entry.readings||[]).map(r=>r.hoseId));
+   setModelFamily(f);
+   if(matches.length===1){addHose(matches[0].id);setModelFamily(null);}
+   else if(!matches.length)setNotice('No hay mangueras pendientes para ese producto.');
+ }
+ function start(kind){setError('');setNotice('');setToPrint(null);setStep('meters');setModelFamily(null);setEntry(newEntry(stationId,uid,name,kind));}
+ function patchAllocation(i,changes){setEntry(prev=>({...prev,allocations:prev.allocations.map((l,j)=>i===j?{...l,...changes}:l)}));}
+ function scannedInvoice(info){
+   if(scanIndex==null)return;
+   if((entry?.allocations||[]).some((l,i)=>i!==scanIndex&&l.invoiceCuf===info.cuf&&l.invoiceNumber===info.invoiceNumber)){setError('Esta factura ya está en los vales del turno.');setScanIndex(null);return;}
+   patchAllocation(scanIndex,{reference:`Factura ${info.invoiceNumber}`,invoiceNumber:info.invoiceNumber,invoiceCuf:info.cuf,invoiceNit:info.issuerNit,invoiceQrSource:info.source});
+   setScanIndex(null);setNotice('QR leído. Revisa cliente, litros y tipo de vale.');
+ }
+ async function persist(submit=false){
+   if(!entry)return;
+   if(!enabled){setError('El modo de pruebas está deshabilitado para esta estación.');return;}
+   // Fecha/hora real del cierre: se toma al pulsar Enviar en jornadas actuales.
+   const working=submit&&entry.kind==='turno'&&!isHistorical&&!entry.endedAt?{...entry,endedAt:localTime()}:entry;
+   const issues=submit?operatorPilotValidation(working):[];
+   if(issues.length){setError('Revisa antes de enviar: '+issues.join(' · '));return;}
+   if(submit&&entry.kind==='turno'&&isHistorical&&(!entry.startedAt||!entry.endedAt)){setError('Indica las horas de la jornada anterior.');return;}
+   const next={...working,status:submit?'enviado':entry.status,localRevision:entry.localRevision+1,syncState:'pendiente'};
+   setBusy(true);setError('');setNotice('');
+   try{
+     await putLocalPilot(next);setEntry(next);await refreshLocal();
+     setNotice('Guardado en el dispositivo. Sincronización de pruebas pendiente.');
+     if(online){syncPilotEntry(next).then(async()=>{await refreshLocal();setNotice('Compartido para revisión. NO afecta a Meters oficiales.');}).catch(e=>setNotice(`Guardado en el dispositivo. Se reintentará la carga: ${e.message}`));}
+     if(submit){setToPrint({...next,printToken:Date.now()});setEntry(null);}
+   }catch(e){setError('No se pudo almacenar de forma segura: '+e.message);}finally{setBusy(false);}
+ }
+ async function syncNow(){setBusy(true);setError('');
+   try{const results=await flushLocalPilots(stationId,uid);await refreshLocal();
+     const failed=results.filter(x=>!x.ok);setNotice(failed.length?`${results.length-failed.length} enviados; ${failed.length} pendientes. ${failed[0].error}`:`${results.length} registros sincronizados para revisión.`);
+   }catch(e){setError(e.message);}finally{setBusy(false);}
+ }
+ async function toggle(value){setBusy(true);setError('');
+   try{await setPilotEnabled(stationId,uid,value);setNotice(value?'Modo de pruebas habilitado para operadores.':'Modo de pruebas deshabilitado. Los registros quedan conservados.');}
+   catch(e){setError(e.message);}finally{setBusy(false);}
+ }
+ async function markReview(x,status){setBusy(true);setError('');
+  try{await reviewPilot(stationId,x.id,uid,status,reviewNote);setNotice('Revisión de prueba registrada; sin integración oficial.');setReviewNote('');}
+  catch(e){setError(e.message);}finally{setBusy(false);}
+ }
+ // Imprimir requiere que React renderice primero el documento seleccionado.
+ useEffect(()=>{if(!toPrint)return;const timeout=setTimeout(()=>window.print(),100);return ()=>clearTimeout(timeout);},[toPrint?.id,toPrint?.printToken,toPrint?.localRevision]);
+ const statusFor=(hoseId,meterType,phase,ref)=>{
+   const ev=shared.find(e=>e.hoseId===hoseId&&e.meterType===meterType&&e.operatorUid===uid&&e.shiftId===ref&&e.phase===phase);
+   if(!ev)return null;
+   const comparisons=compareAdjacentReadings(shared.filter(e=>e.meterType===meterType),hoseId);
+   const linked=comparisons.find(x=>x.incoming===ev.id||x.outgoing===ev.id);
+   return linked?.status||'pendiente';
+ };
+ return <section className="panel pilot-root">
+   <div className="pilot-screen-only">
+     <div className="section-title"><div><h2>{isOperator?'Mi turno':'Arqueos de operadores · Etapa de pruebas'}</h2>{!isOperator&&<p>Una colección separada del libro oficial. Los arqueos pueden imprimirse; no generan movimientos ANH ni saldos de caja.</p>}</div>
+       <span className={`pilot-flag ${enabled?'pilot-on':'pilot-off'}`}>{settingsReady?(enabled?'Pruebas activas':'Pruebas desactivadas'):'Cargando...'}</span></div>
+     <div className="pilot-banner">{isOperator?<><b>{online?'● En línea':'○ Sin conexión'}</b>{pending>0&&<> · {pending} pendientes</>}</>:<><b>{online?'Con conexión':'Sin conexión'}</b> · {pending} registro(s) pendientes de enviar a revisión. {online?'Las lecturas se comparan cuando ambos operadores sincronizan.':'El formulario puede guardarse en este dispositivo; la conciliación esperará conexión.'}</>}</div>
+     {error&&<p className="alert error" role="alert">{error}</p>}{notice&&<p className="alert success" role="status">{notice}</p>}
+     {canManage&&<div className="pilot-manager-switch"><div><b>Administración y Gerencia</b><p>Habilitar o deshabilitar el registro de pruebas por estación. Nunca activa la sincronización oficial.</p></div><button type="button" className={enabled?'secondary':'primary'} disabled={busy||!settingsReady} onClick={()=>toggle(!enabled)}>{enabled?'Desactivar pruebas':'Activar pruebas'}</button></div>}
+     {midnightReminder&&<p className="pilot-midnight"><b>⏰ Medianoche:</b> {midnightReminder} <button type="button" onClick={()=>start('medianoche')}>Abrir corte</button></p>}
+     {isOperator&&enabled&&<div className="pilot-actions pilot-main-actions"><button className="primary" onClick={()=>start('turno')} disabled={busy}>+ Mi turno</button><button className="secondary" onClick={()=>start('medianoche')} disabled={busy}>00:00</button>{pending>0&&<button className="secondary" disabled={busy||!online} onClick={syncNow}>Sincronizar ({pending})</button>}</div>}
+     {isOperator&&!enabled&&<p className="pilot-guidance">Pruebas no activadas.</p>}
+     {entry&&isOperator&&enabled&&<div className="pilot-editor">
+       <div className="pilot-between"><h3>{entry.kind==='medianoche'?'Corte 00:00':'Turno'}</h3><span className="pilot-flag">{entry.date}</span></div>
+       <div className="pilot-fields pilot-quick-date">
+         <label>Fecha<input type="date" max={operativeDate()} value={entry.date} onChange={e=>{try{if((entry.readings.length||entry.allocations.length)&&!window.confirm('Cambiar fecha borra las lecturas y vales de este borrador. ¿Continuar?'))return;const changed=shiftDateChange(entry,e.target.value);patchEntry({...changed,readings:[],allocations:[]});setStep('meters');}catch(err){setError(err.message);}}}/></label>
+         {entry.kind==='turno'&&isHistorical&&<><label>Inicio (retroactivo)<input type="datetime-local" value={entry.startedAt} onChange={e=>patchEntry({startedAt:e.target.value})}/></label><label>Fin (retroactivo)<input type="datetime-local" value={entry.endedAt} onChange={e=>patchEntry({endedAt:e.target.value})}/></label></>}
+         {entry.kind==='turno'&&!isHistorical&&<div className="pilot-auto-time"><b>⏱ Inicio: {entry.startedAt?.slice(11)||'—'}</b><small>Fin automático al enviar</small></div>}
+         {entry.kind==='medianoche'&&<span>⏱ {entry.endedAt?.slice(11)||'—'}</span>}
+       </div>
+       {entry.kind==='turno'&&<div className="pilot-steps" role="tablist" aria-label="Pasos del turno">{[['meters','1 Meters'],['vales','2 Vales'],['caja','3 Caja']].map(([key,label])=><button type="button" key={key} role="tab" aria-selected={step===key} className={step===key?'active':''} onClick={()=>setStep(key)}>{label}</button>)}</div>}
+       {(entry.kind==='medianoche'||step==='meters')&&<>
+       {isHistorical&&entry.kind==='turno'&&!entry.startedAt&&<small className="pilot-guidance">Indica primero la hora de inicio de esta jornada anterior.</small>}
+       <div className="pilot-3d-switch"><b>Mangueras</b><div><button type="button" className={hoseView==='3d'?'active':''} onClick={()=>{setHoseView('3d');setModelFamily(null);}}>Vista 3D</button><button type="button" className={hoseView==='lista'?'active':''} onClick={()=>setHoseView('lista')}>Lista</button></div></div>
+       {hoseView==='3d'&&sortedHoses.length>0&&<>
+         <DispenserPilot3D hoses={sortedHoses} disabled={isHistorical&&entry.kind==='turno'&&!entry.startedAt} onSelectFamily={chooseModelFamily}/>
+         {modelFamily&&<div className="pilot-3d-options" aria-label="Mangueras configuradas en esta estación">
+           {candidateHoses(sortedHoses,modelFamily,entry.readings.map(r=>r.hoseId)).map(h=><button type="button" key={h.id} disabled={isHistorical&&entry.kind==='turno'&&!entry.startedAt} onClick={()=>{addHose(h.id);setModelFamily(null);}}>{h.name}<small>{h.productCode}</small></button>)}
+         </div>}
+       </>}
+       {(hoseView==='lista'||!sortedHoses.length)&&<div className="pilot-hose-picker" aria-label="Elegir manguera">{sortedHoses.map(h=>{const chosen=entry.readings.some(r=>r.hoseId===h.id);return <button type="button" key={h.id} disabled={chosen||(isHistorical&&entry.kind==='turno'&&!entry.startedAt)} className={`pilot-hose-choice ${chosen?'chosen':''}`} onClick={()=>addHose(h.id)}><span className="pilot-nozzle">⛽</span><b>{h.name}</b><small>{h.productCode}</small><span>{chosen?'✓':'+'}</span></button>;})}</div>}
+       {entry.kind==='medianoche'&&<div className="pilot-guidance">Pendientes: {midnightMissing.length} mangueras. Si no hubo venta, confirma la lectura. {sameSectorMissing.length>0&&<button className="secondary" onClick={()=>patchEntry({readings:[...entry.readings,...sameSectorMissing.map(h=>hoseLine(h,h.productCode,''))]})}>Incluir {sameSectorMissing.length} manguera(s) sin uso de mi sector</button>}</div>}
+       {entry.readings.map((row,i)=><div key={row.hoseId}>
+         <MeterFields row={row} kind={entry.kind} onChange={c=>patchLine(i,c)}/>
+         <div className="pilot-hose-footer"><button className="secondary" onClick={()=>patchEntry({readings:entry.readings.filter((_,j)=>j!==i)})}>Quitar</button>{entry.kind==='turno'&&<span className="pilot-small">{statusFor(row.hoseId,row.primary,'inicio',entry.id)||'Verificar inicial'}</span>}</div>
+       </div>)}
+       </>}
+       {entry.kind==='turno'&&step==='vales'&&<>
+         <div className="pilot-between"><h3>Vales</h3><button className="secondary" onClick={()=>patchEntry({allocations:[...entry.allocations,{concept:'prepago',customer:'',reference:'',productCode:selectedProducts[0]||currentProducts[0]||'GE',volume:''}]})}>+ Vale</button></div>
+         {entry.allocations.map((line,i)=><div className="pilot-allocation" key={i}>
+           <label>Concepto<select value={line.concept} onChange={e=>patchEntry({allocations:entry.allocations.map((l,j)=>j===i?{...l,concept:e.target.value}:l)})}>{allowedConcepts.map(c=><option key={c} value={c}>{TYPES[c]}</option>)}</select></label>
+           <label>Producto<select value={line.productCode} onChange={e=>patchEntry({allocations:entry.allocations.map((l,j)=>j===i?{...l,productCode:e.target.value}:l)})}>{(selectedProducts.length?selectedProducts:currentProducts).map(p=><option key={p} value={p}>{p}</option>)}</select></label>
+           <label>Cliente<input value={line.customer} onChange={e=>patchAllocation(i,{customer:e.target.value})}/></label>
+           <label>Factura / vale<input value={line.reference} onChange={e=>patchAllocation(i,{reference:e.target.value})}/></label>
+           <label>Litros / m³<input type="number" inputMode="decimal" step="any" min="0" value={line.volume} onChange={e=>patchAllocation(i,{volume:e.target.value})}/></label>
+           {['prepago','postpago'].includes(line.concept)&&<button type="button" className="primary" onClick={()=>{setScanIndex(i);setError('');}}>▣ Escanear QR</button>}
+           {line.invoiceCuf&&<small className="pilot-qr-info">QR: {line.invoiceNumber} · {line.invoiceNit} · CUF {line.invoiceCuf.slice(0,10)}…</small>}
+           <button className="secondary" onClick={()=>patchEntry({allocations:entry.allocations.filter((_,j)=>j!==i)})}>Quitar</button>
+         </div>)}
+       </>}
+       {entry.kind==='turno'&&step==='caja'&&<>
+         <h3>Caja</h3>
+         <div className="pilot-fields">{[['qr','Cobros QR (Bs)'],['card','Tarjeta (Bs)'],['cash','Efectivo contado (Bs)'],['deposit','Depósitos documentados (Bs)']].map(([key,label])=><label key={key}>{label}<input inputMode="decimal" type="number" min="0" step="0.01" value={entry.payments[key]} onChange={e=>patchEntry({payments:{...entry.payments,[key]:e.target.value}})}/></label>)}</div>
+         <div className="pilot-settlement"><span>Ventas Bs {money(settlement.totalSales)}</span><span>Vales/descuentos Bs {money(settlement.otherValue)}</span><span>Efectivo esperado Bs {money(settlement.expectedCash)}</span><b>Diferencia de caja Bs {money(settlement.difference)}</b></div>
+         {settlement.warnings.length>0&&<details className="pilot-guidance"><summary>{settlement.warnings.length} aviso(s) para revisar</summary>{settlement.warnings.join(' · ')}</details>}
+       </>}
+       <label>Nota (opcional)<textarea rows={2} maxLength={500} value={entry.note} onChange={e=>patchEntry({note:e.target.value})}/></label>
+       <div className="pilot-actions pilot-save"><button className="secondary" disabled={busy} onClick={()=>persist(false)}>Guardar</button><button className="primary" disabled={busy||!entry.readings.length} onClick={()=>persist(true)}>{busy?'Guardando...':'Cerrar y enviar'}</button><button className="secondary" disabled={busy} onClick={()=>setEntry(null)}>Salir</button></div>
+     </div>}
+     <h3>{canManage?'Arqueos de prueba de la estación':'Historial'}</h3>
+     {combined.length===0?<p className="muted">Todavía no hay arqueos de prueba.</p>:<div className="pilot-list">{combined.map(x=><div key={x.id} className="pilot-item">
+       <div><b>{x.kind==='medianoche'?'00:00':'Turno'} · {x.date}</b><p>{canManage?x.operatorName+' · ':''}{x.readings?.length||0} mangueras · {x.status==='enviado'?'Enviado':'Borrador'} · {x.syncState==='pendiente'?'Pendiente':'En nube'}</p>{x.reviewStatus&&<span>Revisión: {x.reviewStatus}</span>}</div>
+       <div className="pilot-actions"><button className="secondary" onClick={()=>{setToPrint({...x,printToken:Date.now()});setNotice('Abriendo vista de impresión. También puedes elegir Guardar como PDF.');}}>Imprimir / PDF</button>
+         {isOperator&&enabled&&x.status==='borrador'&&<button className="secondary" onClick={()=>{setEntry(x);setError('');}}>Continuar</button>}
+         {canManage&&x.status==='enviado'&&<><button disabled={busy} onClick={()=>markReview(x,'revisado')}>Revisado</button><button disabled={busy} onClick={()=>markReview(x,'observado')}>Observar</button></>}
+       </div>
+     </div>)}</div>}
+     {canManage&&<div className="pilot-banner">Control de medianoche: {new Set(shared.filter(e=>e.phase==='medianoche'&&e.day===clockDate()).map(e=>e.hoseId)).size} / {sortedHoses.length} mangueras habilitadas con lecturas recibidas hoy. Los registros pendientes offline aparecerán al sincronizar.</div>}
+     {canManage&&<label>Observación de revisión<input maxLength={500} value={reviewNote} onChange={e=>setReviewNote(e.target.value)} placeholder="Comentarios antes de observar un arqueo"/></label>}
+     {isOperator&&<details className="pilot-compare-details"><summary>Estado de mangueras</summary>
+       <div className="pilot-readings">{sortedHoses.map(h=>{const checked=shared.filter(e=>e.hoseId===h.id&&e.meterType===(h.meterTypes?.includes('digital')?'digital':'mecanico'));
+         const results=compareAdjacentReadings(checked,h.id);
+         const own=checked.filter(e=>e.operatorUid===uid&&['inicio','final'].includes(e.phase)).sort((a,b)=>String(a.observedAt).localeCompare(String(b.observedAt))).at(-1);
+         const found=results.filter(x=>x.incoming===own?.id||x.outgoing===own?.id).at(-1);
+         return <div key={h.id}><b>{h.name}</b><span className={`pilot-flag pilot-${found?.status||'off'}`}>{found?.status==='conciliado'?'Meter conciliado':found?.status==='diferencia'?`Diferencia ${fmt(found.difference)}`:'Pendiente de comparación'}</span></div>})}</div>
+     </details>}
+   </div>
+   {scanIndex!==null&&<OperatorQRScanner onResult={scannedInvoice} onClose={()=>setScanIndex(null)}/>}
+   {toPrint&&<PilotPrint entry={toPrint} stationName={stationName}/>}
+ </section>;
+}

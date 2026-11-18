@@ -1,0 +1,132 @@
+import React,{useEffect,useMemo,useRef,useState} from 'react';
+import {availableDispenserFamilies,familyFromModelName,MODEL_PARTS,PRM_NAME} from './dispenserPilotCatalog.js';
+import './dispenserPilot3D.css';
+
+/**
+ * Vista ilustrativa de los equipos reales entregados en GLB.
+ * Cada modelo representa una familia de producto, NO un dispensador físico concreto.
+ * La asociación con mangueras reales sucede exclusivamente por IDs del catálogo de la estación.
+ */
+export default function DispenserPilot3D({hoses=[],onSelectFamily,disabled=false}){
+ const canvasRef=useRef(null),viewerRef=useRef(null),onPickRef=useRef(onSelectFamily);
+ onPickRef.current=onSelectFamily;
+ const families=useMemo(()=>availableDispenserFamilies(hoses),[hoses]);
+ const familyKey=families.join('|');
+ const [focus,setFocus]=useState('todos'),[issue,setIssue]=useState(''),[loaded,setLoaded]=useState(false);
+ const canShowPRM=families.includes('gnv');
+ useEffect(()=>{if(!canShowPRM&&focus==='prm')setFocus('todos');},[canShowPRM,focus]);
+ useEffect(()=>{viewerRef.current?.focus(focus);},[focus,loaded]);
+
+ useEffect(()=>{
+  if(!families.length||!canvasRef.current)return;
+  let stopped=false,renderer=null,controls=null,root=null,observer=null,camera=null,scene=null,three=null;
+  let down=null,renderFrame=0;
+  const canvas=canvasRef.current;
+  let clickListener=null,downListener=null,resizeListener=null;
+  const draw=()=>{if(!renderer||!scene||!camera)return;renderer.render(scene,camera);};
+  const scheduleDraw=()=>{if(stopped||renderFrame)return;renderFrame=requestAnimationFrame(()=>{renderFrame=0;draw();});};
+  const resize=()=>{
+   if(!renderer||!camera||!canvas.parentElement)return;
+   const w=Math.max(100,Math.round(canvas.parentElement.clientWidth));
+   const h=Math.max(220,Math.round(canvas.clientHeight||290));
+   renderer.setSize(w,h,false);camera.aspect=w/h;camera.updateProjectionMatrix();scheduleDraw();
+  };
+  (async()=>{
+   try{
+    // Cargar Three.js sólo cuando el operador abre la vista 3D.
+    const [THREE,{GLTFLoader},{OrbitControls}]=await Promise.all([
+      import('three'),import('three/addons/loaders/GLTFLoader.js'),import('three/addons/controls/OrbitControls.js')
+    ]);
+    if(stopped)return;
+    three=THREE;
+    renderer=new THREE.WebGLRenderer({canvas,antialias:true,alpha:false,powerPreference:'low-power'});
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,1.5));
+    renderer.outputColorSpace=THREE.SRGBColorSpace;
+    scene=new THREE.Scene();scene.background=new THREE.Color('#f2f6fb');
+    scene.add(new THREE.HemisphereLight(0xffffff,0xb8c6d5,2.1));
+    const sun=new THREE.DirectionalLight(0xffffff,2.0);sun.position.set(2.5,6,5);scene.add(sun);
+    camera=new THREE.PerspectiveCamera(39,1,.06,70);
+    controls=new OrbitControls(camera,canvas);
+    controls.enableDamping=false;controls.enablePan=false;
+    controls.minDistance=1.2;controls.maxDistance=25;
+    controls.minPolarAngle=.15;controls.maxPolarAngle=Math.PI*.72;
+    controls.addEventListener('change',scheduleDraw);
+    resize();
+    const gltf=await new GLTFLoader().loadAsync('/models/Petro_Surtidores_PRM.glb');
+    if(stopped){gltf.scene.traverse(o=>{if(o.isMesh){o.geometry?.dispose();const mats=Array.isArray(o.material)?o.material:[o.material];mats.forEach(m=>m?.dispose());}});return;}
+    root=gltf.scene;scene.add(root);
+    const focusScene=(wanted)=>{
+      if(!root||!camera||!controls)return;
+      const choice=(wanted==='prm'&&canShowPRM)?'prm':wanted;
+      for(const part of root.children){
+        const f=familyFromModelName(part.name);
+        part.visible=(part.name===PRM_NAME)?choice==='prm':Boolean(f&&families.includes(f)&&(choice==='todos'||choice===f));
+      }
+      const bounds=new THREE.Box3();let found=false;
+      root.children.forEach(part=>{if(part.visible){bounds.expandByObject(part);found=true;}});
+      if(!found){scheduleDraw();return;}
+      const size=bounds.getSize(new THREE.Vector3());
+      const center=bounds.getCenter(new THREE.Vector3());
+      const aspect=Math.max(.55,canvas.clientWidth/Math.max(canvas.clientHeight,220));
+      const span=Math.max(size.y,size.x/aspect,size.z,1.5);
+      const distance=Math.min(20,Math.max(2.8,span/(2*Math.tan((camera.fov*Math.PI/180)/2))*1.16));
+      camera.position.set(center.x+distance*.12,center.y+distance*.13,center.z+distance);
+      controls.target.copy(center);camera.lookAt(center);controls.update();scheduleDraw();
+    };
+    viewerRef.current={focus:focusScene};
+    focusScene(focus);
+    if(typeof ResizeObserver!=='undefined'){
+      observer=new ResizeObserver(resize);observer.observe(canvas.parentElement);
+    }else{
+      resizeListener=resize;window.addEventListener('resize',resizeListener);
+    }
+    const raycaster=new THREE.Raycaster(),mouse=new THREE.Vector2();
+    downListener=e=>{down={x:e.clientX,y:e.clientY};};
+    clickListener=e=>{
+      if(disabled||!root||!down)return;
+      const movement=Math.hypot(e.clientX-down.x,e.clientY-down.y);down=null;
+      if(movement>10)return; // se giró el modelo, no se seleccionó manguera
+      const rect=canvas.getBoundingClientRect();
+      mouse.set(((e.clientX-rect.left)/rect.width)*2-1,-((e.clientY-rect.top)/rect.height)*2+1);
+      raycaster.setFromCamera(mouse,camera);
+      const hits=raycaster.intersectObjects(root.children,true);
+      for(const hit of hits){
+        let p=hit.object;
+        while(p&&p.parent!==root)p=p.parent;
+        const family=familyFromModelName(p?.name);
+        if(family&&families.includes(family)){
+          onPickRef.current?.(family);
+          return;
+        }
+      }
+    };
+    canvas.addEventListener('pointerdown',downListener);
+    canvas.addEventListener('pointerup',clickListener);
+    setLoaded(true);setIssue('');
+   }catch(e){if(!stopped){setIssue('La vista 3D no está disponible en este dispositivo. Usa «Lista».');setLoaded(false);}}
+  })();
+  return ()=>{
+    stopped=true;viewerRef.current=null;
+    if(renderFrame)cancelAnimationFrame(renderFrame);
+    if(observer)observer.disconnect();if(resizeListener)window.removeEventListener('resize',resizeListener);
+    if(downListener)canvas.removeEventListener('pointerdown',downListener);
+    if(clickListener)canvas.removeEventListener('pointerup',clickListener);
+    controls?.dispose();
+    if(root)root.traverse(o=>{if(o.isMesh){o.geometry?.dispose();const mats=Array.isArray(o.material)?o.material:[o.material];mats.forEach(m=>m?.dispose());}});
+    renderer?.dispose();
+  };
+ },[familyKey,disabled]);
+ if(!families.length)return <p className="pilot-3d-note">Sin mangueras configuradas.</p>;
+ return <div className="pilot-3d-shell">
+   <div className="pilot-3d-tabs">
+     {families.length>1&&<button type="button" className={focus==='todos'?'active':''} onClick={()=>setFocus('todos')}>Todos</button>}
+     {families.map(f=><button key={f} type="button" className={(focus===f||(focus==='todos'&&families.length===1))?'active':''} onClick={()=>setFocus(f)}>{MODEL_PARTS[f].label}</button>)}
+     {canShowPRM&&<button type="button" className={focus==='prm'?'active':''} onClick={()=>setFocus('prm')}>PRM</button>}
+   </div>
+   <div className="pilot-3d-frame">
+     <canvas ref={canvasRef} className="pilot-3d-canvas" aria-label="Modelo tridimensional de dispensadores y mangueras; toca una manguera para seleccionarla"/>
+     {!loaded&&!issue&&<div className="pilot-3d-loading">Cargando dispensadores…</div>}
+   </div>
+   {issue?<p className="pilot-3d-error" role="status">{issue}</p>:<div className="pilot-3d-hint">{focus==='prm'?'PRM · sólo vista de referencia':'Toca dispensador o manguera · desliza para girar'}</div>}
+ </div>;
+}

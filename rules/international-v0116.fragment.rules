@@ -1,0 +1,55 @@
+      // Tarifa internacional de la ANH por producto y fecha de vigencia.
+      // El diferencial es el publicado, no una resta inferida en cada venta.
+      match /internationalPriceHistory/{rateId} {
+        allow read: if isOwner() || isMember(sid);
+        allow create: if isManager(sid) &&
+          request.resource.data.keys().hasOnly([
+            'productCode','effectiveDate','effectiveTime','internationalPriceBs',
+            'differentialBs','resolutionNumber','sourceUrl','currency','createdBy','createdAt'
+          ]) && request.resource.data.keys().hasAll([
+            'productCode','effectiveDate','effectiveTime','internationalPriceBs',
+            'differentialBs','resolutionNumber','sourceUrl','currency','createdBy','createdAt'
+          ]) &&
+          request.resource.data.productCode in ['GE','GE_PLUS','DO','D_ULS','GNV'] &&
+          rateId == request.resource.data.productCode + '_' + request.resource.data.effectiveDate + '_' + request.resource.data.effectiveTime &&
+          request.resource.data.effectiveDate is string &&
+          request.resource.data.effectiveDate.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$') &&
+          request.resource.data.effectiveTime is string &&
+          request.resource.data.effectiveTime.matches('^([01][0-9]|2[0-3]):[0-5][0-9]$') &&
+          request.resource.data.internationalPriceBs is number &&
+          request.resource.data.internationalPriceBs > 0 &&
+          request.resource.data.internationalPriceBs <= 1000 &&
+          request.resource.data.differentialBs is number &&
+          request.resource.data.differentialBs >= 0 &&
+          request.resource.data.differentialBs <= request.resource.data.internationalPriceBs &&
+          request.resource.data.resolutionNumber is string &&
+          request.resource.data.resolutionNumber.size() >= 3 &&
+          request.resource.data.resolutionNumber.size() <= 120 &&
+          request.resource.data.sourceUrl is string &&
+          request.resource.data.sourceUrl.size() <= 500 &&
+          request.resource.data.currency == 'BOB' &&
+          request.resource.data.createdBy == request.auth.uid &&
+          exists(/databases/$(database)/documents/stations/$(sid)/products/$(request.resource.data.productCode));
+        allow update, delete: if false;
+      }
+      match /internationalDeposits/{depositId} {
+        allow read: if isOwner() || isMember(sid);
+        allow create: if isManager(sid) &&
+          request.resource.data.keys().hasOnly([
+            'period','date','amountBs','reference','notes','status','recordedBy','createdAt'
+          ]) && request.resource.data.keys().hasAll([
+            'period','date','amountBs','reference','notes','status','recordedBy','createdAt'
+          ]) &&
+          request.resource.data.period is string &&
+          request.resource.data.period.matches('^[0-9]{4}-(0[1-9]|1[0-2])$') &&
+          request.resource.data.date is string &&
+          request.resource.data.date.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$') &&
+          request.resource.data.amountBs is number &&
+          request.resource.data.amountBs > 0 && request.resource.data.amountBs <= 100000000 &&
+          request.resource.data.reference is string &&
+          request.resource.data.reference.size() >= 3 && request.resource.data.reference.size() <= 160 &&
+          request.resource.data.notes is string && request.resource.data.notes.size() <= 500 &&
+          request.resource.data.status == 'registrado' &&
+          request.resource.data.recordedBy == request.auth.uid;
+        allow update, delete: if false;
+      }

@@ -1,0 +1,719 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function myProfilePath() { return /databases/$(database)/documents/users/$(request.auth.uid); }
+    function invitationPath(email) { return /databases/$(database)/documents/invitations/$(email); }
+    function stationDocPath(sid) { return /databases/$(database)/documents/stations/$(sid); }
+    function hasProfile() { return signedIn() && exists(myProfilePath()); }
+    function profile() { return get(myProfilePath()).data; }
+    function isOwner() {
+      return hasProfile() && profile().role == 'owner' && profile().active == true;
+    }
+    function isAdmin(sid) {
+      return hasProfile() && profile().role == 'admin' &&
+        profile().stationId == sid && profile().active == true;
+    }
+    function isMember(sid) {
+      return hasProfile() && profile().stationId == sid && profile().active == true;
+    }
+    function isManager(sid) { return isOwner() || isAdmin(sid); }
+    function verifiedEmail() {
+      return signedIn() && request.auth.token.email_verified == true &&
+        request.auth.token.email is string;
+    }
+
+    match /users/{uid} {
+      allow get: if signedIn() && (
+        request.auth.uid == uid || isOwner() ||
+        (resource.data.role == 'operator' && isAdmin(resource.data.stationId))
+      );
+      allow list: if isOwner() ||
+        (resource.data.role == 'operator' && isAdmin(resource.data.stationId));
+
+      // Activación de usuario: debe existir invitación pendiente y consumirse
+      // atómicamente en el mismo lote junto con la creación del perfil.
+      allow create: if verifiedEmail() && request.auth.uid == uid &&
+        request.resource.data.keys().hasOnly([
+          'displayName','email','role','stationId','active','createdAt'
+        ]) && request.resource.data.keys().hasAll([
+          'displayName','email','role','stationId','active','createdAt'
+        ]) && request.resource.data.active == true &&
+        request.resource.data.email == request.auth.token.email &&
+        exists(invitationPath(request.auth.token.email)) &&
+        get(invitationPath(request.auth.token.email)).data.status == 'pending' &&
+        get(invitationPath(request.auth.token.email)).data.role == request.resource.data.role &&
+        get(invitationPath(request.auth.token.email)).data.stationId == request.resource.data.stationId &&
+        (request.resource.data.role == 'operator' ||
+          get(stationDocPath(request.resource.data.stationId)).data.adminEmail == request.auth.token.email) &&
+        get(invitationPath(request.auth.token.email)).data.name == request.resource.data.displayName &&
+        request.resource.data.role in ['admin', 'operator'] &&
+        getAfter(invitationPath(request.auth.token.email)).data.status == 'accepted' &&
+        getAfter(invitationPath(request.auth.token.email)).data.acceptedUid == uid;
+
+      // Los roles, estaciones y correos son inmutables desde clientes.
+      allow update: if (
+        (isOwner() && uid != request.auth.uid &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['active','displayName'])) ||
+        (resource.data.role == 'operator' && isAdmin(resource.data.stationId) &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['active','displayName'])) ||
+        (signedIn() && request.auth.uid == uid &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['displayName']))
+      );
+      allow delete: if false;
+    }
+
+    match /invitations/{emailId} {
+      allow get: if isOwner() ||
+        (signedIn() && verifiedEmail() && request.auth.token.email == emailId) ||
+        isAdmin(resource.data.stationId);
+      // Los administradores deben consultar solamente su estación (where stationId == ...).
+      allow list: if isOwner() || isAdmin(resource.data.stationId);
+      allow create: if signedIn() &&
+        request.resource.data.keys().hasOnly([
+          'email','name','role','stationId','status','createdBy','createdAt'
+        ]) && request.resource.data.keys().hasAll([
+          'email','name','role','stationId','status','createdBy','createdAt'
+        ]) && request.resource.data.email == emailId &&
+        request.resource.data.email is string &&
+        request.resource.data.name is string &&
+        request.resource.data.status == 'pending' &&
+        request.resource.data.createdBy == request.auth.uid &&
+        existsAfter(stationDocPath(request.resource.data.stationId)) &&
+        (
+          (isOwner() && request.resource.data.role == 'admin' &&
+            getAfter(stationDocPath(request.resource.data.stationId)).data.adminEmail == emailId) ||
+          (isAdmin(request.resource.data.stationId) && request.resource.data.role == 'operator')
+        );
+      // El destinatario verificado acepta su propia invitación: se exige
+      // que el lote cree el perfil correspondiente. No se puede cambiar el rol.
+      allow update: if verifiedEmail() && request.auth.token.email == emailId &&
+        resource.data.status == 'pending' && request.resource.data.status == 'accepted' &&
+        request.resource.data.acceptedUid == request.auth.uid &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'status','acceptedUid','acceptedAt'
+        ]) &&
+        !exists(myProfilePath()) && existsAfter(myProfilePath()) &&
+        getAfter(myProfilePath()).data.email == emailId &&
+        getAfter(myProfilePath()).data.role == resource.data.role &&
+        getAfter(myProfilePath()).data.stationId == resource.data.stationId;
+      allow delete: if isOwner() ||
+        (resource.data.status == 'pending' && resource.data.role == 'operator' &&
+         isAdmin(resource.data.stationId));
+    }
+
+    match /stations/{sid} {
+      allow get: if isOwner() || isMember(sid);
+      allow list: if isOwner();
+      allow create: if isOwner() &&
+        request.resource.data.keys().hasOnly([
+          'name','type','city','adminEmail','active','createdBy','createdAt'
+        ]) && request.resource.data.keys().hasAll([
+          'name','type','city','adminEmail','active','createdBy','createdAt'
+        ]) && request.resource.data.name is string &&
+        request.resource.data.type in ['estacion','puesto'] &&
+        request.resource.data.createdBy == request.auth.uid &&
+        request.resource.data.active == true;
+      allow update: if isOwner() &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name','city','active']);
+      allow delete: if false;
+
+      // Metadatos declarativos por estación. Solo propietarios y administradores.
+      match /reportSettings/{reportId} {
+        allow read: if (isOwner() || isMember(sid)) && reportId == 'sustancias';
+        allow create, update: if reportId == 'sustancias' && isManager(sid) &&
+          request.resource.data.keys().hasOnly([
+            'registration','legalName','legalRepresentative','city','address',
+            'responsible','telephone','updatedBy','updatedAt'
+          ]) && request.resource.data.keys().hasAll([
+            'registration','legalName','legalRepresentative','city','address',
+            'responsible','telephone','updatedBy','updatedAt'
+          ]) &&
+          request.resource.data.registration is string && request.resource.data.registration.size() <= 150 &&
+          request.resource.data.legalName is string && request.resource.data.legalName.size() <= 150 &&
+          request.resource.data.legalRepresentative is string && request.resource.data.legalRepresentative.size() <= 150 &&
+          request.resource.data.city is string && request.resource.data.city.size() <= 150 &&
+          request.resource.data.address is string && request.resource.data.address.size() <= 240 &&
+          request.resource.data.responsible is string && request.resource.data.responsible.size() <= 150 &&
+          request.resource.data.telephone is string && request.resource.data.telephone.size() <= 150 &&
+          request.resource.data.updatedBy == request.auth.uid &&
+          request.resource.data.updatedAt == request.time;
+        allow delete: if false;
+      }
+      match /products/{productId} {
+        allow read: if isOwner() || isMember(sid);
+        allow write: if isManager(sid) &&
+          request.resource.data.keys().hasOnly(['code','name','unit','active','updatedAt']) &&
+          request.resource.data.code == productId;
+      }
+      // Precios inmutables por fecha de vigencia. No borrar ni sobrescribir
+      // porque cada arqueo conserva el precio aplicable a la operación.
+      match /priceHistory/{priceId} {
+        allow read: if isOwner() || isMember(sid);
+        allow create: if isManager(sid) &&
+          request.resource.data.keys().hasOnly([
+            'productCode','effectiveDate','effectiveTime','priceBs','currency','createdBy','createdAt'
+          ]) && request.resource.data.keys().hasAll([
+            'productCode','effectiveDate','effectiveTime','priceBs','currency','createdBy','createdAt'
+          ]) &&
+          request.resource.data.productCode in ['GE','GE_PLUS','DO','D_ULS','GNV'] &&
+          priceId == request.resource.data.productCode + '_' + request.resource.data.effectiveDate + '_' + request.resource.data.effectiveTime &&
+          request.resource.data.effectiveDate is string &&
+          request.resource.data.effectiveDate.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$') &&
+          request.resource.data.effectiveTime is string &&
+          request.resource.data.effectiveTime.matches('^([01][0-9]|2[0-3]):[0-5][0-9]$') &&
+          request.resource.data.priceBs is number &&
+          request.resource.data.priceBs > 0 && request.resource.data.priceBs <= 1000 &&
+          request.resource.data.currency == 'BOB' &&
+          request.resource.data.createdBy == request.auth.uid &&
+          exists(/databases/$(database)/documents/stations/$(sid)/products/$(request.resource.data.productCode));
+        allow update, delete: if false;
+      }
+      // Tarifa internacional de la ANH por producto y fecha de vigencia.
+      // El diferencial es el publicado, no una resta inferida en cada venta.
+      match /internationalPriceHistory/{rateId} {
+        allow read: if isOwner() || isMember(sid);
+        allow create: if isManager(sid) &&
+          request.resource.data.keys().hasOnly([
+            'productCode','effectiveDate','effectiveTime','internationalPriceBs',
+            'differentialBs','resolutionNumber','sourceUrl','currency','createdBy','createdAt'
+          ]) && request.resource.data.keys().hasAll([
+            'productCode','effectiveDate','effectiveTime','internationalPriceBs',
+            'differentialBs','resolutionNumber','sourceUrl','currency','createdBy','createdAt'
+          ]) &&
+          request.resource.data.productCode in ['GE','GE_PLUS','DO','D_ULS','GNV'] &&
+          rateId == request.resource.data.productCode + '_' + request.resource.data.effectiveDate + '_' + request.resource.data.effectiveTime &&
+          request.resource.data.effectiveDate is string &&
+          request.resource.data.effectiveDate.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$') &&
+          request.resource.data.effectiveTime is string &&
+          request.resource.data.effectiveTime.matches('^([01][0-9]|2[0-3]):[0-5][0-9]$') &&
+          request.resource.data.internationalPriceBs is number &&
+          request.resource.data.internationalPriceBs > 0 &&
+          request.resource.data.internationalPriceBs <= 1000 &&
+          request.resource.data.differentialBs is number &&
+          request.resource.data.differentialBs >= 0 &&
+          request.resource.data.differentialBs <= request.resource.data.internationalPriceBs &&
+          request.resource.data.resolutionNumber is string &&
+          request.resource.data.resolutionNumber.size() >= 3 &&
+          request.resource.data.resolutionNumber.size() <= 120 &&
+          request.resource.data.sourceUrl is string &&
+          request.resource.data.sourceUrl.size() <= 500 &&
+          request.resource.data.currency == 'BOB' &&
+          request.resource.data.createdBy == request.auth.uid &&
+          exists(/databases/$(database)/documents/stations/$(sid)/products/$(request.resource.data.productCode));
+        allow update, delete: if false;
+      }
+      match /internationalDeposits/{depositId} {
+        allow read: if isOwner() || isMember(sid);
+        allow create: if isManager(sid) &&
+          request.resource.data.keys().hasOnly([
+            'period','date','amountBs','reference','notes','status','recordedBy','createdAt'
+          ]) && request.resource.data.keys().hasAll([
+            'period','date','amountBs','reference','notes','status','recordedBy','createdAt'
+          ]) &&
+          request.resource.data.period is string &&
+          request.resource.data.period.matches('^[0-9]{4}-(0[1-9]|1[0-2])$') &&
+          request.resource.data.date is string &&
+          request.resource.data.date.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$') &&
+          request.resource.data.amountBs is number &&
+          request.resource.data.amountBs > 0 && request.resource.data.amountBs <= 100000000 &&
+          request.resource.data.reference is string &&
+          request.resource.data.reference.size() >= 3 && request.resource.data.reference.size() <= 160 &&
+          request.resource.data.notes is string && request.resource.data.notes.size() <= 500 &&
+          request.resource.data.status == 'registrado' &&
+          request.resource.data.recordedBy == request.auth.uid;
+        allow update, delete: if false;
+      }
+      function tankDocPath(tankId) {
+        return /databases/$(database)/documents/stations/$(sid)/tanks/$(tankId);
+      }
+      function calibrationDocPath(calId) {
+        return /databases/$(database)/documents/stations/$(sid)/calibrations/$(calId);
+      }
+      match /tanks/{tankId} {
+        allow read: if isOwner() || isMember(sid);
+        allow create: if isManager(sid) &&
+          request.resource.data.name is string && request.resource.data.name.size() > 0 &&
+          request.resource.data.active == true &&
+          (
+            (request.resource.data.keys().hasOnly([
+              'name','productCode','capacityLiters','active','createdAt'
+             ]) && request.resource.data.productCode in ['GE','GE_PLUS','DO','D_ULS'] &&
+              request.resource.data.capacityLiters is number && request.resource.data.capacityLiters > 0)
+            ||
+            (request.resource.data.keys().hasOnly([
+              'name','kind','productCode','waterCapacityLiters',
+              'bankName','maxPressureBar','active','createdAt'
+             ]) && request.resource.data.productCode == 'GNV' &&
+              request.resource.data.kind == 'gnv_cylinder' &&
+              request.resource.data.waterCapacityLiters is number &&
+              request.resource.data.waterCapacityLiters > 0 &&
+              request.resource.data.bankName is string &&
+              request.resource.data.maxPressureBar is number &&
+              request.resource.data.maxPressureBar >= 0)
+          );
+        // Calibraciones inmutables: solamente cambia la referencia activa.
+        allow update: if isManager(sid) &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'activeCalibrationId','calibrationUpdatedAt'
+          ]) && request.resource.data.productCode != 'GNV' &&
+          request.resource.data.activeCalibrationId is string &&
+          existsAfter(calibrationDocPath(request.resource.data.activeCalibrationId)) &&
+          getAfter(calibrationDocPath(request.resource.data.activeCalibrationId)).data.tankId == tankId &&
+          getAfter(calibrationDocPath(request.resource.data.activeCalibrationId)).data.productCode == resource.data.productCode;
+        allow delete: if false;
+      }
+      match /calibrations/{calId} {
+        allow read: if isOwner() || isMember(sid);
+        allow create: if isManager(sid) &&
+          request.resource.data.keys().hasOnly([
+            'tankId','productCode','points','sourceFile','sourceSheet',
+            'minMm','maxMm','createdBy','createdAt'
+          ]) && request.resource.data.tankId is string &&
+          exists(tankDocPath(request.resource.data.tankId)) &&
+          get(tankDocPath(request.resource.data.tankId)).data.productCode == request.resource.data.productCode &&
+          request.resource.data.productCode in ['GE','GE_PLUS','DO','D_ULS'] &&
+          request.resource.data.points is list &&
+          request.resource.data.points.size() >= 10 &&
+          request.resource.data.points.size() <= 4000 &&
+          request.resource.data.sourceFile is string &&
+          request.resource.data.sourceSheet is string &&
+          request.resource.data.minMm is number &&
+          request.resource.data.maxMm is number &&
+          request.resource.data.maxMm > request.resource.data.minMm &&
+          request.resource.data.createdBy == request.auth.uid;
+        allow update, delete: if false;
+      }
+      match /initialSettings/{settingId} {
+        allow read: if isOwner() || isMember(sid);
+        allow create, update: if isManager(sid) && settingId == 'start' &&
+          request.resource.data.keys().hasOnly(['date','updatedAt']) &&
+          request.resource.data.date is string &&
+          request.resource.data.date.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$');
+        allow delete: if false;
+      }
+      match /initialTanks/{tankId} {
+        allow read: if isOwner() || isMember(sid);
+        allow create, update: if isManager(sid) &&
+          request.resource.data.keys().hasOnly([
+            'tankId','productCode','calibrationId','heightMm','physicalLiters',
+            'accountingLiters','recordedBy','createdAt'
+          ]) && request.resource.data.tankId == tankId &&
+          exists(tankDocPath(tankId)) &&
+          request.resource.data.productCode == get(tankDocPath(tankId)).data.productCode &&
+          request.resource.data.calibrationId is string &&
+          exists(calibrationDocPath(request.resource.data.calibrationId)) &&
+          get(calibrationDocPath(request.resource.data.calibrationId)).data.tankId == tankId &&
+          request.resource.data.heightMm is number &&
+          request.resource.data.physicalLiters is number &&
+          request.resource.data.physicalLiters >= 0 &&
+          request.resource.data.accountingLiters is number &&
+          request.resource.data.accountingLiters >= 0 &&
+          request.resource.data.recordedBy == request.auth.uid;
+        allow delete: if false;
+      }
+      // Los tres meters del puente de regulación de GNV parten de Datos iniciales.
+      match /initialGNVBridge/{docId} {
+        allow read: if isOwner() || isMember(sid);
+        allow create, update: if isManager(sid) && docId == 'start' &&
+          request.resource.data.keys().hasOnly(['readings','recordedBy','createdAt']) &&
+          request.resource.data.readings is map &&
+          request.resource.data.readings.keys().hasAll(['manual','corrected','uncorrected']) &&
+          request.resource.data.readings.keys().hasOnly(['manual','corrected','uncorrected']) &&
+          request.resource.data.readings.manual is number && request.resource.data.readings.manual >= 0 &&
+          request.resource.data.readings.corrected is number && request.resource.data.readings.corrected >= 0 &&
+          request.resource.data.readings.uncorrected is number && request.resource.data.readings.uncorrected >= 0 &&
+          request.resource.data.recordedBy == request.auth.uid;
+        allow delete: if false;
+      }
+      match /initialMeters/{hoseId} {
+        allow read: if isOwner() || isMember(sid);
+        allow create, update: if isManager(sid) &&
+          request.resource.data.keys().hasOnly([
+            'hoseId','readings','recordedBy','createdAt'
+          ]) && request.resource.data.hoseId == hoseId &&
+          exists(/databases/$(database)/documents/stations/$(sid)/hoses/$(hoseId)) &&
+          request.resource.data.readings is map &&
+          request.resource.data.readings.keys().hasOnly(['mecanico','digital']) &&
+          request.resource.data.readings.keys().size() >= 1 &&
+          request.resource.data.recordedBy == request.auth.uid;
+        allow delete: if false;
+      }
+      match /inventoryReadings/{readingId} {
+        allow read: if isOwner() || isMember(sid);
+        allow create: if (isOwner() || isMember(sid)) &&
+          request.resource.data.keys().hasOnly([
+            'date','month','tankId','productCode','calibrationId',
+            'heightMm','volumeLiters','recordedBy','createdAt'
+          ]) && request.resource.data.date is string &&
+          request.resource.data.month is string &&
+          request.resource.data.date.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$') &&
+          request.resource.data.month.matches('^[0-9]{4}-[0-9]{2}$') &&
+          readingId == request.resource.data.date + '_' + request.resource.data.tankId &&
+          exists(tankDocPath(request.resource.data.tankId)) &&
+          request.resource.data.productCode == get(tankDocPath(request.resource.data.tankId)).data.productCode &&
+          request.resource.data.productCode in ['GE','GE_PLUS','DO','D_ULS'] &&
+          request.resource.data.calibrationId == get(tankDocPath(request.resource.data.tankId)).data.activeCalibrationId &&
+          exists(/databases/$(database)/documents/stations/$(sid)/initialSettings/start) &&
+          request.resource.data.date >= get(/databases/$(database)/documents/stations/$(sid)/initialSettings/start).data.date &&
+          exists(/databases/$(database)/documents/stations/$(sid)/initialTanks/$(request.resource.data.tankId)) &&
+          request.resource.data.heightMm is number && request.resource.data.heightMm >= 0 &&
+          request.resource.data.volumeLiters is number && request.resource.data.volumeLiters >= 0 &&
+          request.resource.data.recordedBy == request.auth.uid;
+        allow update: if isManager(sid) &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'heightMm','volumeLiters','updatedBy','updatedAt','correctionReason'
+          ]) && request.resource.data.updatedBy == request.auth.uid &&
+          request.resource.data.heightMm is number && request.resource.data.heightMm >= 0 &&
+          request.resource.data.volumeLiters is number && request.resource.data.volumeLiters >= 0 &&
+          request.resource.data.correctionReason is string &&
+          request.resource.data.correctionReason.size() >= 5;
+        allow delete: if false;
+      }
+      match /inventoryAudit/{auditId} {
+        allow read: if isOwner() || isAdmin(sid);
+        allow create: if isManager(sid) &&
+          request.resource.data.keys().hasOnly([
+            'readingId','date','reason','previousHeightMm','previousVolumeLiters',
+            'newHeightMm','newVolumeLiters','changedBy','createdAt'
+          ]) && request.resource.data.changedBy == request.auth.uid &&
+          request.resource.data.reason is string &&
+          request.resource.data.reason.size() >= 5 &&
+          request.resource.data.previousHeightMm is number &&
+          request.resource.data.previousVolumeLiters is number &&
+          request.resource.data.newHeightMm is number &&
+          request.resource.data.newVolumeLiters is number;
+        allow update, delete: if false;
+      }
+      // Recepciones: volumen físico único por tanque y documentos por producto.
+      // Los resultados son cálculos a partir de entradas manuales; la conciliación
+      // de mermas definitiva requiere revisión administrativa posterior.
+      function sameLiquidFamily(a, b) {
+        return (a in ['GE','GE_PLUS'] && b in ['GE','GE_PLUS']) ||
+               (a in ['DO','D_ULS'] && b in ['DO','D_ULS']);
+      }
+      match /receptions/{receptionId} {
+        allow read: if isOwner() || isMember(sid);
+        allow create: if (isOwner() || isMember(sid)) &&
+          request.resource.data.keys().hasOnly([
+            'date','month','tankId','tankName','calibrationId',
+            'productCode','priorProductCode','changeReason','oldProductAccountingL',
+            'supplier','documentNumber','cisternPlate','startedAt','finishedAt',
+            'startHeightMm','endHeightMm','startVolumeL','endVolumeL',
+            'documentLiters','otherIncomeDocument','otherIncomeLiters',
+            'meterMode','meterCoverageComplete','meterLines','salesByProductL',
+            'physicalIncreaseL','salesDuringReceptionL','physicalReceivedL',
+            'transportDifferenceL','quality','observation','status',
+            'recordedBy','createdAt'
+          ]) &&
+          request.resource.data.keys().hasAll([
+            'date','month','tankId','tankName','calibrationId',
+            'productCode','priorProductCode','changeReason','oldProductAccountingL',
+            'supplier','documentNumber','cisternPlate','startedAt','finishedAt',
+            'startHeightMm','endHeightMm','startVolumeL','endVolumeL',
+            'documentLiters','otherIncomeDocument','otherIncomeLiters',
+            'meterMode','meterCoverageComplete','meterLines','salesByProductL',
+            'physicalIncreaseL','salesDuringReceptionL','physicalReceivedL',
+            'transportDifferenceL','quality','observation','status',
+            'recordedBy','createdAt'
+          ]) &&
+          request.resource.data.recordedBy == request.auth.uid &&
+          request.resource.data.status == 'vigente' &&
+          request.resource.data.date is string &&
+          request.resource.data.date.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$') &&
+          request.resource.data.month == request.resource.data.date[0:7] &&
+          request.resource.data.tankId is string &&
+          exists(tankDocPath(request.resource.data.tankId)) &&
+          get(tankDocPath(request.resource.data.tankId)).data.productCode != 'GNV' &&
+          sameLiquidFamily(request.resource.data.productCode,
+            get(tankDocPath(request.resource.data.tankId)).data.productCode) &&
+          sameLiquidFamily(request.resource.data.priorProductCode,
+            get(tankDocPath(request.resource.data.tankId)).data.productCode) &&
+          request.resource.data.calibrationId ==
+            get(tankDocPath(request.resource.data.tankId)).data.activeCalibrationId &&
+          exists(/databases/$(database)/documents/stations/$(sid)/initialTanks/$(request.resource.data.tankId)) &&
+          exists(/databases/$(database)/documents/stations/$(sid)/initialSettings/start) &&
+          request.resource.data.date >= get(/databases/$(database)/documents/stations/$(sid)/initialSettings/start).data.date &&
+          request.resource.data.supplier is string && request.resource.data.supplier.size()>0 &&
+          request.resource.data.documentNumber is string && request.resource.data.documentNumber.size()>0 &&
+          request.resource.data.changeReason is string &&
+          (request.resource.data.productCode == request.resource.data.priorProductCode ||
+           request.resource.data.changeReason.size() >= 8) &&
+          request.resource.data.startedAt is string &&
+          request.resource.data.finishedAt is string &&
+          request.resource.data.finishedAt >= request.resource.data.startedAt &&
+          request.resource.data.startHeightMm is number && request.resource.data.startHeightMm>=0 &&
+          request.resource.data.endHeightMm is number && request.resource.data.endHeightMm>=0 &&
+          request.resource.data.startVolumeL is number && request.resource.data.startVolumeL>=0 &&
+          request.resource.data.endVolumeL is number && request.resource.data.endVolumeL>=0 &&
+          request.resource.data.documentLiters is number && request.resource.data.documentLiters>=0 &&
+          request.resource.data.otherIncomeLiters is number && request.resource.data.otherIncomeLiters>=0 &&
+          request.resource.data.physicalIncreaseL is number &&
+          request.resource.data.physicalReceivedL is number &&
+          request.resource.data.transportDifferenceL is number &&
+          request.resource.data.meterLines is list && request.resource.data.meterLines.size()<=25 &&
+          request.resource.data.salesByProductL is map &&
+          request.resource.data.salesByProductL.keys().hasOnly(['GE','GE_PLUS','DO','D_ULS']) &&
+          request.resource.data.meterMode in ['none','meters'] &&
+          request.resource.data.meterCoverageComplete is bool &&
+          request.resource.data.quality in ['provisional','verificable_con_meters'] &&
+          (request.resource.data.meterMode == 'none' ?
+            (request.resource.data.salesDuringReceptionL == null &&
+             request.resource.data.meterLines.size()==0 &&
+             request.resource.data.meterCoverageComplete == false &&
+             request.resource.data.quality == 'provisional') :
+            (request.resource.data.salesDuringReceptionL is number &&
+             request.resource.data.salesDuringReceptionL>=0 &&
+             request.resource.data.meterLines.size()>=1 &&
+             (request.resource.data.meterCoverageComplete ?
+               request.resource.data.quality == 'verificable_con_meters' :
+               request.resource.data.quality == 'provisional')));
+        // Nunca borrar una recepción. Correcciones: anular con motivo y crear nueva.
+        allow update: if isManager(sid) && resource.data.status == 'vigente' &&
+          request.resource.data.status == 'anulada' &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'status','cancelReason','canceledBy','canceledAt'
+          ]) && request.resource.data.cancelReason is string &&
+          request.resource.data.cancelReason.size() >= 8 &&
+          request.resource.data.canceledBy == request.auth.uid;
+        allow delete: if false;
+      }
+      match /dispensers/{dispenserId} {
+        allow read: if isOwner() || isMember(sid);
+        allow create: if isManager(sid) &&
+          request.resource.data.keys().hasOnly(['name','active','createdAt']) &&
+          request.resource.data.name is string && request.resource.data.active == true;
+        allow update, delete: if false;
+      }
+      function validMeters(meters) {
+        return meters is list && meters.size() >= 1 && meters.size() <= 2 &&
+          meters.hasOnly(['mecanico','digital']) &&
+          (meters.size() == 1 || meters.hasAll(['mecanico','digital']));
+      }
+      match /hoses/{hoseId} {
+        allow read: if isOwner() || isMember(sid);
+        allow create: if isManager(sid) &&
+          request.resource.data.keys().hasOnly([
+            'name','dispenserId','feedTankIds','productCode','meterType',
+            'meterTypes','active','createdAt'
+          ]) && request.resource.data.name is string &&
+          exists(/databases/$(database)/documents/stations/$(sid)/dispensers/$(request.resource.data.dispenserId)) &&
+          request.resource.data.feedTankIds is list &&
+          request.resource.data.feedTankIds.size() <= 10 &&
+          (('productCode' in request.resource.data &&
+            request.resource.data.productCode in ['GE','GE_PLUS','DO','D_ULS','GNV'] &&
+            ((request.resource.data.productCode == 'GNV' && request.resource.data.feedTankIds.size() == 0) ||
+             (request.resource.data.productCode != 'GNV' && request.resource.data.feedTankIds.size() >= 1))) ||
+           (!('productCode' in request.resource.data) && request.resource.data.feedTankIds.size() >= 1)) &&
+          (('meterTypes' in request.resource.data && validMeters(request.resource.data.meterTypes)) ||
+           (!('meterTypes' in request.resource.data) &&
+             request.resource.data.meterType in ['mecanico','digital'])) &&
+          request.resource.data.active == true;
+        allow update: if isManager(sid) &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'meterTypes','meterConfigUpdatedAt'
+          ]) && validMeters(request.resource.data.meterTypes);
+        allow delete: if false;
+      }
+      // Compatibilidad controlada: las mangueras creadas antes de v0.7 no
+      // guardaban productCode. En ese caso se valida el producto contra
+      // el tanque de alimentación configurado, sin dar permisos globales.
+      function hoseProductMatches(hoseId, productCode) {
+        let hose = get(/databases/$(database)/documents/stations/$(sid)/hoses/$(hoseId)).data;
+        return (
+          ('productCode' in hose &&
+            (hose.productCode == productCode ||
+             sameLiquidFamily(productCode, hose.productCode))) ||
+          (!('productCode' in hose) &&
+            'feedTankIds' in hose &&
+            hose.feedTankIds is list &&
+            hose.feedTankIds.size() > 0 &&
+            exists(tankDocPath(hose.feedTankIds[0])) &&
+            (get(tankDocPath(hose.feedTankIds[0])).data.productCode == productCode ||
+             sameLiquidFamily(productCode,
+               get(tankDocPath(hose.feedTankIds[0])).data.productCode)))
+        );
+      }
+      // Cuentas de vales: inmutables. Los abonos y cobros se registran
+      // como operaciones separadas auditables, nunca por edición del saldo.
+      match /voucherAccounts/{accountId} {
+        allow read: if isOwner() || isMember(sid);
+        allow create: if isManager(sid) &&
+          request.resource.data.keys().hasOnly([
+            'name','mode','active','createdBy','createdAt'
+          ]) && request.resource.data.keys().hasAll([
+            'name','mode','active','createdBy','createdAt'
+          ]) && request.resource.data.name is string &&
+          request.resource.data.name.size() >= 3 &&
+          request.resource.data.name.size() <= 120 &&
+          request.resource.data.mode in ['prepago','postpago'] &&
+          request.resource.data.active == true &&
+          request.resource.data.createdBy == request.auth.uid;
+        allow update, delete: if false;
+      }
+      // Recargas prepago y cobros postpago: documentos independientes
+      // que nunca se sobrescriben ni se eliminan.
+      match /voucherCashflows/{cashflowId} {
+        allow read: if isOwner() || isMember(sid);
+        allow create: if isManager(sid) &&
+          request.resource.data.keys().hasOnly([
+            'accountId','date','month','amountBs','kind','reference',
+            'recordedBy','createdAt'
+          ]) && request.resource.data.keys().hasAll([
+            'accountId','date','month','amountBs','kind','reference',
+            'recordedBy','createdAt'
+          ]) &&
+          request.resource.data.accountId is string &&
+          exists(/databases/$(database)/documents/stations/$(sid)/voucherAccounts/$(request.resource.data.accountId)) &&
+          ((request.resource.data.kind == 'recarga_prepago' &&
+            get(/databases/$(database)/documents/stations/$(sid)/voucherAccounts/$(request.resource.data.accountId)).data.mode == 'prepago') ||
+           (request.resource.data.kind == 'cobro_postpago' &&
+            get(/databases/$(database)/documents/stations/$(sid)/voucherAccounts/$(request.resource.data.accountId)).data.mode == 'postpago')) &&
+          request.resource.data.date is string &&
+          request.resource.data.date.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$') &&
+          request.resource.data.month == request.resource.data.date[0:7] &&
+          request.resource.data.amountBs is number &&
+          request.resource.data.amountBs > 0 &&
+          request.resource.data.amountBs <= 10000000 &&
+          request.resource.data.reference is string &&
+          request.resource.data.reference.size() >= 3 &&
+          request.resource.data.reference.size() <= 160 &&
+          request.resource.data.recordedBy == request.auth.uid;
+        allow update, delete: if false;
+      }
+      // Meters: una fila inmutable por fecha, manguera e intervalo. La
+      // anulación administrativa conserva la trazabilidad del dato original.
+      match /meterShifts/{shiftId} {
+        allow read: if isOwner() || isMember(sid);
+        allow create: if (isOwner() || isMember(sid)) &&
+          request.resource.data.keys().hasOnly([
+            'date','shiftTime','month','hoseId','hoseName','productCode','sequence',
+            'concept','customer','reference','primary','readings','movementLines',
+            'meterTotals','grossVolume','returnedVolume','netTankOutVolume',
+            'meterDifference','unit','priceBs','priceEffectiveAt','amountBs',
+            'paymentStatus','status','recordedBy','createdAt'
+          ]) &&
+          request.resource.data.keys().hasAll([
+            'date','shiftTime','month','hoseId','hoseName','productCode','sequence',
+            'concept','customer','reference','primary','readings','movementLines',
+            'meterTotals','grossVolume','returnedVolume','netTankOutVolume',
+            'meterDifference','unit','priceBs','priceEffectiveAt','amountBs',
+            'paymentStatus','status','recordedBy','createdAt'
+          ]) &&
+          request.resource.data.date is string &&
+          request.resource.data.date.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$') &&
+          request.resource.data.shiftTime is string &&
+          request.resource.data.shiftTime.matches('^([01][0-9]|2[0-3]):[0-5][0-9]$') &&
+          request.resource.data.month == request.resource.data.date[0:7] &&
+          request.resource.data.hoseId is string &&
+          request.resource.data.sequence is int &&
+          request.resource.data.sequence >= 0 && request.resource.data.sequence <= 20 &&
+          exists(/databases/$(database)/documents/stations/$(sid)/hoses/$(request.resource.data.hoseId)) &&
+          hoseProductMatches(request.resource.data.hoseId,
+            request.resource.data.productCode) &&
+          request.resource.data.primary in ['mecanico','digital'] &&
+          request.resource.data.readings is map &&
+          request.resource.data.meterTotals is map &&
+          request.resource.data.movementLines is list &&
+          request.resource.data.movementLines.size() >= 1 &&
+          request.resource.data.movementLines.size() <= 20 &&
+          request.resource.data.grossVolume is number && request.resource.data.grossVolume >= 0 &&
+          request.resource.data.returnedVolume is number && request.resource.data.returnedVolume >= 0 &&
+          request.resource.data.netTankOutVolume is number && request.resource.data.netTankOutVolume >= 0 &&
+          request.resource.data.grossVolume >= request.resource.data.returnedVolume &&
+          request.resource.data.amountBs is number && request.resource.data.amountBs >= 0 &&
+          request.resource.data.status == 'vigente' &&
+          request.resource.data.recordedBy == request.auth.uid &&
+          exists(/databases/$(database)/documents/stations/$(sid)/initialSettings/start) &&
+          request.resource.data.date >= get(/databases/$(database)/documents/stations/$(sid)/initialSettings/start).data.date;
+        allow update: if isManager(sid) &&
+          resource.data.status == 'vigente' &&
+          request.resource.data.status == 'anulada' &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'status','cancelReason','canceledBy','canceledAt'
+          ]) &&
+          request.resource.data.cancelReason is string &&
+          request.resource.data.cancelReason.size() >= 8 &&
+          request.resource.data.canceledBy == request.auth.uid;
+        allow delete: if false;
+      }
+      // Puente GNV: 3 controles independientes. Se conserva el historial
+      // anterior (formato v0.7) pero los nuevos días no lo sobrescriben.
+      function validGnvBridgeCounter(c) {
+        return c is map &&
+          c.keys().hasOnly(['initial','final','volume']) &&
+          c.keys().hasAll(['initial','final','volume']) &&
+          c.initial is number && c.initial >= 0 &&
+          c.final is number && c.final >= c.initial &&
+          c.volume is number && c.volume >= 0 &&
+          c.volume >= c.final - c.initial - 0.001 &&
+          c.volume <= c.final - c.initial + 0.001;
+      }
+      match /gnvBridge/{bridgeId} {
+        allow read: if isOwner() || isMember(sid);
+        allow create: if (isOwner() || isMember(sid)) &&
+          bridgeId == request.resource.data.date &&
+          request.resource.data.keys().hasOnly([
+            'date','month','unit','readings','receivedManual',
+            'receivedCorrected','receivedUncorrected','uncorrectedConvertedM3','recordedBy','createdAt'
+          ]) &&
+          request.resource.data.date is string &&
+          request.resource.data.date.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$') &&
+          request.resource.data.month == request.resource.data.date[0:7] &&
+          request.resource.data.unit == 'm³' &&
+          request.resource.data.readings is map &&
+          request.resource.data.readings.keys().hasAll(['manual','corrected','uncorrected']) &&
+          request.resource.data.readings.keys().hasOnly(['manual','corrected','uncorrected']) &&
+          validGnvBridgeCounter(request.resource.data.readings.manual) &&
+          validGnvBridgeCounter(request.resource.data.readings.corrected) &&
+          validGnvBridgeCounter(request.resource.data.readings.uncorrected) &&
+          request.resource.data.receivedManual == request.resource.data.readings.manual.volume &&
+          request.resource.data.receivedCorrected == request.resource.data.readings.corrected.volume &&
+          request.resource.data.receivedUncorrected == request.resource.data.readings.uncorrected.volume &&
+          request.resource.data.uncorrectedConvertedM3 is number &&
+          request.resource.data.uncorrectedConvertedM3 >= 0 &&
+          request.resource.data.uncorrectedConvertedM3 >= request.resource.data.readings.uncorrected.volume * 28.31701636 - 0.002 &&
+          request.resource.data.uncorrectedConvertedM3 <= request.resource.data.readings.uncorrected.volume * 28.31701636 + 0.002 &&
+          request.resource.data.recordedBy == request.auth.uid &&
+          exists(/databases/$(database)/documents/stations/$(sid)/initialGNVBridge/start) &&
+          exists(/databases/$(database)/documents/stations/$(sid)/initialSettings/start) &&
+          request.resource.data.date >= get(/databases/$(database)/documents/stations/$(sid)/initialSettings/start).data.date;
+        allow update, delete: if false;
+      }
+      // Observaciones del libro mensual. Nunca altera saldos ni movimientos.
+      match /movementNotes/{noteId} {
+        function validMovementNote() {
+          return request.resource.data.keys().hasOnly([
+            'date','productCode','note','updatedBy','updatedAt'
+          ]) && request.resource.data.keys().hasAll([
+            'date','productCode','note','updatedBy','updatedAt'
+          ]) &&
+          request.resource.data.date is string &&
+          request.resource.data.date.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$') &&
+          request.resource.data.productCode in [
+            'GE','GE_PLUS','DO','D_ULS','GNV','FAMILY_gasolina','FAMILY_diesel'
+          ] &&
+          noteId == request.resource.data.date + '_' + request.resource.data.productCode &&
+          request.resource.data.note is string &&
+          request.resource.data.note.size() >= 3 &&
+          request.resource.data.note.size() <= 1000 &&
+          request.resource.data.updatedBy == request.auth.uid &&
+          request.resource.data.updatedAt == request.time;
+        }
+        allow read: if isOwner() || isMember(sid);
+        allow create: if isManager(sid) && validMovementNote();
+        allow update: if isManager(sid) && validMovementNote() &&
+          request.resource.data.date == resource.data.date &&
+          request.resource.data.productCode == resource.data.productCode;
+        allow delete: if false;
+      }
+      match /accessAudit/{eventId} {
+        allow read: if isOwner() || isAdmin(sid);
+        allow write: if false;
+      }
+      // Los módulos operativos se habilitarán con reglas detalladas en la siguiente fase.
+      match /{unreleased=**} { allow read, write: if false; }
+    }
+    match /{everythingElse=**} { allow read, write: if false; }
+  }
+}
