@@ -46,7 +46,7 @@ const reportLinks = [
 function ReportPlaceholder({item,onBack}){
   const Icon=item.icon;
   return <div className="report-placeholder-page">
-    <PageHeader label="REPORTES · DISTRIGAS LÍQUIDOS" title={item.title} description={item.description}>
+    <PageHeader label="REPORTES · MOJOCOYA SRL" title={item.title} description={item.description}>
       <button type="button" className="secondary" onClick={onBack}><ArrowLeft size={16}/> Volver al panel</button>
     </PageHeader>
     <section className="panel report-placeholder-panel"><Icon size={27}/>
@@ -100,7 +100,7 @@ export default function App(){
   if(profile.active!==true)return <div className="center-page"><section className="auth-card compact"><LockKeyhole size={35}/><h2>Acceso desactivado</h2><p>Comunícate con el propietario de tu establecimiento.</p><button className="primary" onClick={()=>signOut(auth)}>Salir</button></section></div>;
   const canSeeManagement=profile.role==='owner'||profile.role==='admin';
   return <div className="shell"><aside className={`sidebar ${showMenu?'open':''}`}>
-    <div className="logo"><div className="logo-square"><Fuel size={22}/></div><div><strong>Distrigas</strong><span>LÍQUIDOS</span></div></div>
+    <div className="logo"><div className="logo-square"><Fuel size={22}/></div><div><strong>MOJOCOYA</strong><span>SRL</span></div></div>
     <p className="sidebar-label">PLATAFORMA</p>
     <button type="button" className={`nav-static nav-button ${area==='platform'?'nav-active':''}`} onClick={()=>openArea('platform')} aria-current={area==='platform'?'page':undefined}><ChartColumn size={18}/> {profile.role==='owner'?'Panel del propietario':profile.role==='admin'?'Panel de estación':'Panel operativo'}</button>
     {/* V0119D: menu lateral y permisos de reportes */}

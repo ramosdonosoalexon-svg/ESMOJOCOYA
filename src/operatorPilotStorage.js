@@ -1,5 +1,5 @@
 // IndexedDB: cola local persistente. Por diseño, sin importación a libros oficiales.
-const NAME='distrigas-operadores-pruebas',STORE='arqueos',VERSION=1;
+const NAME='mojocoya-operadores-pruebas',STORE='arqueos',VERSION=1;
 function connect(){return new Promise((resolve,reject)=>{
   if(typeof indexedDB==='undefined'){reject(new Error('Este navegador no ofrece IndexedDB. No se puede garantizar guardado offline.'));return;}
   const request=indexedDB.open(NAME,VERSION);

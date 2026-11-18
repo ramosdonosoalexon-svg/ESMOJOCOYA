@@ -19,3 +19,4 @@ dist/
 *.p12
 *serviceAccount*.json
 *adminsdk*.json
+!.env.example

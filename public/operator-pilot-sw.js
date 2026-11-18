@@ -1,6 +1,6 @@
 /* Interfaz de pruebas disponible sin red tras una primera visita ONLINE.
    No se interceptan peticiones a Firebase ni se actualizan libros oficiales. */
-const CACHE='distrigas-operator-pilot-v0119';
+const CACHE='mojocoya-operator-pilot-v0119';
 async function cacheShell(){
  const cache=await caches.open(CACHE);
  const response=await fetch('/',{cache:'no-store'});
@@ -11,7 +11,7 @@ async function cacheShell(){
  await Promise.all(assets.map(url=>cache.add(url).catch(()=>{})));
 }
 self.addEventListener('install',event=>event.waitUntil(cacheShell().then(()=>self.skipWaiting()).catch(()=>{})));
-self.addEventListener('activate',event=>event.waitUntil(Promise.all([caches.keys().then(keys=>Promise.all(keys.filter(k=>k.startsWith('distrigas-operator-pilot-')&&k!==CACHE).map(k=>caches.delete(k)))),self.clients.claim()])));
+self.addEventListener('activate',event=>event.waitUntil(Promise.all([caches.keys().then(keys=>Promise.all(keys.filter(k=>k.startsWith('mojocoya-operator-pilot-')&&k!==CACHE).map(k=>caches.delete(k)))),self.clients.claim()])));
 self.addEventListener('fetch',event=>{
  const req=event.request;
  if(req.method!=='GET'||new URL(req.url).origin!==self.location.origin)return;

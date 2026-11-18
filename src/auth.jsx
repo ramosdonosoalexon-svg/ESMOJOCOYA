@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { createUserWithEmailAndPassword, sendEmailVerification,
   signInWithEmailAndPassword, sendPasswordResetEmail } from 'firebase/auth';
-import { auth, configured } from './firebase';
+import { auth, configured, configError } from './firebase';
 import { acceptInvitation } from './data';
 
 const msg = e => {
@@ -28,12 +28,12 @@ export function Login() {
     } catch(e) {setError(msg(e));} finally {setBusy(false);}
   }
   return <div className="auth-page"><div className="auth-brand"><div className="brand-icon">▰</div>
-    <h1>Distrigas <span>Líquidos</span></h1><p>Control inteligente de estaciones de servicio y puestos de venta.</p>
+    <h1>MOJOCOYA <span>SRL</span></h1><p>Control inteligente de estaciones de servicio y puestos de venta.</p>
     <div className="auth-feature">Inventarios físicos y contables · Recepciones · Meters · Conciliaciones</div></div>
     <section className="auth-card"><p className="eyebrow">ACCESO SEGURO</p>
     <h2>{mode==='login'?'Bienvenido': mode==='register'?'Activar invitación':'Recuperar contraseña'}</h2>
     <p className="muted">{mode==='register'?'Regístrate con el correo al que te invitaron.': 'Inicia sesión con tu correo autorizado.'}</p>
-    {!configured && <p className="alert error">Falta configurar el archivo .env con los datos de Firebase.</p>}
+    {!configured && <p className="alert error">{configError}</p>}
     <form onSubmit={submit} className="form-stack"><label>Correo electrónico<input type="email" value={email} required autoComplete="email" placeholder="usuario@empresa.com" onChange={e=>setEmail(e.target.value)}/></label>
     {mode!=='reset'&&<label>Contraseña<input type="password" required minLength={6} autoComplete={mode==='register'?'new-password':'current-password'} value={password} onChange={e=>setPassword(e.target.value)}/></label>}
     {error&&<p className="alert error">{error}</p>}{notice&&<p className="alert success">{notice}</p>}

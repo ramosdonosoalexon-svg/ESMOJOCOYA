@@ -1,29 +1,21 @@
-# Distrigas Líquidos · Familia Mancilla
+# MOJOCOYA SRL — Plataforma de control de combustibles
 
-Primera base funcional de gestión multiestación con Firebase, React y Vite.
+Sistema independiente de gestión de estaciones de servicio y puestos de venta, basado en React, Vite y Firebase.
 
-**Para instalar, asignar el primer propietario y publicar:** abre [INICIO.md](./INICIO.md).
+Incluye acceso por roles, configuración de estaciones, tanques, dispensadores y mangueras, inventarios, recepciones, meters, movimientos, operadores y reportes.
 
-### Arquitectura
+**Importante:** Este repositorio tiene código propio de MOJOCOYA SRL. No reutilizar la base de datos, usuarios ni despliegue del sistema original. Cada empresa debe tener su proyecto Firebase independiente.
 
-- `src/` — interfaz React, inicio de sesión, panel central y configuración de estaciones.
-- `firestore.rules` — acceso por roles, aislamiento por estación, invitaciones verificadas.
-- `firebase.json` / `.firebaserc` — conexión de despliegue a `distrigasliquidos`.
-- `.env.example` — variables necesarias para el SDK Web (completar localmente).
+## Configuración inicial
 
-### Estado de módulos
+Consulta [INICIO.md](./INICIO.md). Crear `.env` a partir de `.env.example` con los valores de la aplicación web de Firebase **MOJOCOYA SRL**. Los archivos `.env` y `.firebaserc` no se guardan en GitHub.
 
-| Módulo | Estado |
-|---|---|
-| Acceso por roles | Primera implementación |
-| Creación de estaciones y puestos | Primera implementación |
-| Invitación de administradores | Primera implementación |
-| Invitación de operadores | Primera implementación |
-| Configuración física | Alta inicial; no edición/borrado |
-| Inventarios | Planificado |
-| Recepciones | Planificado |
-| Meters y arqueos | Planificado |
-| Movimientos y conciliación | Planificado |
-| Facturito/GOTA | Integración opcional pendiente |
+## Pruebas y despliegue
 
-No hay datos reales precargados, ni reglas desplegadas remotamente por este archivo.
+```powershell
+npm.cmd install
+npm.cmd run build
+npm.cmd run dev
+```
+
+No ejecutar `firebase deploy` hasta identificar de manera inequívoca el ID del proyecto Firebase de MOJOCOYA SRL, habilitar sus servicios y revisar las reglas de Firestore.

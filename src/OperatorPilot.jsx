@@ -51,7 +51,7 @@ function MeterFields({row,onChange,kind}){
 function PilotPrint({entry,stationName}){
  const calc=pilotSettlement(entry);
  return <section className="pilot-print-doc" aria-label="Arqueo imprimible">
-   <div className="pilot-print-head"><h1>DISTRIGAS LÍQUIDOS — ARQUEO DE PRUEBA</h1><strong>NO CONTABILIZADO · NO OFICIAL</strong></div>
+   <div className="pilot-print-head"><h1>MOJOCOYA SRL — ARQUEO DE PRUEBA</h1><strong>NO CONTABILIZADO · NO OFICIAL</strong></div>
    <p><b>Estación:</b> {stationName} · <b>Operador:</b> {entry.operatorName}</p>
    <p><b>Clase:</b> {entry.kind==='medianoche'?'Corte de medianoche':'Turno'} · <b>Fecha:</b> {entry.date}{entry.startedAt&&<> · <b>Inicio:</b> {entry.startedAt}</>}{entry.endedAt&&<> · <b>Final:</b> {entry.endedAt}</>}</p>
    <table><thead><tr><th>Manguera</th><th>Producto</th><th>Meter</th><th>Inicial</th><th>Final</th><th>Despacho</th></tr></thead><tbody>{(entry.readings||[]).map((r,i)=>{const {primary,difference}=pilotHoseTotals(r);return <tr key={i}><td>{r.hoseName}</td><td>{r.productCode}</td><td>{primary}</td><td>{entry.kind==='medianoche'?'—':fmt(r[`${primary}Initial`])}</td><td>{fmt(r[`${primary}Final`])}</td><td>{entry.kind==='medianoche'?'Corte':`${fmt(difference)} ${unitFor(r.productCode)}`}</td></tr>})}</tbody></table>

@@ -42,5 +42,5 @@ export function createAnhExcelBytes(report){
 export async function downloadAnhExcel(report){
  const data=createAnhExcelBytes(report);
  const url=URL.createObjectURL(new Blob([data],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}));
- const a=document.createElement('a');a.href=url;a.download=`Distrigas_ANH_Octano_${String(report.station.name||'estacion').replace(/[^a-z0-9_-]/gi,'_')}_${report.month}.xlsx`;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),40000);
+ const a=document.createElement('a');a.href=url;a.download=`MOJOCOYA_SRL_ANH_Octano_${String(report.station.name||'estacion').replace(/[^a-z0-9_-]/gi,'_')}_${report.month}.xlsx`;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),40000);
 }
